@@ -22,6 +22,7 @@ df_gw_st = pd.read_csv('data/all_well_imputation_cleaned.csv')
 print(df_gw_st.head())
 
 # Assuming the signal is in a column named 'signal'
+
 signal = df_gw_st['09200221'].values
 
 # Detrend the signal

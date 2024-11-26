@@ -1,71 +1,19 @@
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-from scipy.fftpack import fft, fftfreq
-from scipy.signal import butter, filtfilt
-
-# Create a high-pass filter function
-def high_pass_filter(data, cutoff, fs, order=5):
-    """
-    Apply a high-pass filter to the data.
-
-    Parameters:
-    data (array-like): The input signal.
-    cutoff (float): The cutoff frequency in cycles per day.
-    fs (float): The sampling frequency in cycles per day.
-    order (int): The order of the filter.
-
-    Returns:
-    array-like: The filtered signal.
-    """
-    nyquist = 0.5 * fs
-    normal_cutoff = cutoff / nyquist
-    b, a = butter(order, normal_cutoff, btype='high', analog=False)
-    filtered_data = filtfilt(b, a, data)
-    return filtered_data
-
-def detrend_signal(signal, degree=1):
-    x = np.arange(len(signal))
-    poly_coeffs = np.polyfit(x, signal, degree)
-    trend = np.polyval(poly_coeffs, x)
-    detrended_signal = signal - trend
-    return detrended_signal
-
-def plot_detrended_signal(original_signal, detrended_signal):
-    plt.figure(figsize=(12, 6))
-    plt.plot(original_signal, label='Original Signal')
-    plt.plot(detrended_signal, label='Detrended Signal')
-    plt.legend()
-    plt.title('Original and Detrended Signal')
-    plt.show()
-
-def identify_top_dominant_frequencies(signal, top_n=5):
-    # Perform the FFT
-    n = len(signal)
-    T = 1.0  # Sampling interval (1 hour)
-
-    fft_values = fft(signal)
-    fft_values = 2.0 / n * np.abs(fft_values[:n // 2])
-    freqs = fftfreq(n, T)[:n // 2]
-
-    # Convert from cph to cpd
-    freqs = freqs * 24
-
-    # Find the power spectrum
-    power_spectrum = np.abs(fft_values) ** 2
-
-    # Identify the top N dominant frequencies
-    top_indices = np.argsort(power_spectrum)[-top_n:][::-1]
-    top_freqs = freqs[top_indices]
-    top_powers = power_spectrum[top_indices]
-
-    return top_freqs, top_powers
-
-
 
 # Load the data from the CSV file all_wells_cleaned.csv
 df_gw_st = pd.read_csv('data/all_well_imputation_cleaned.csv')
 print(df_gw_st.head())
+
+# Assuming the signal is in a column named 'signal'
+
+signal = df_gw_st['09200221'].values
+
+# Detrend the signal
+detrended_signal = detrend_signal(signal)
+
+# Plot the detrended signal
+plot_detrended_signal(signal, detrended_signal)
 
 # Assuming the signal is in a column named '09200221'
 signal = df_gw_st['09200221'].values

@@ -62,6 +62,19 @@ def identify_top_dominant_frequencies(signal, top_n=5):
     return top_freqs, top_powers
 
 
+def find_dominant_frequency_in_intervals(freqs, power_spectrum, intervals):
+    dominant_frequencies = []
+    for interval in intervals:
+        mask = (freqs >= interval[0]) & (freqs < interval[1])
+        interval_freqs = freqs[mask]
+        interval_powers = power_spectrum[mask]
+        if len(interval_powers) > 0:
+            peak_freq = interval_freqs[np.argmax(interval_powers)]
+            dominant_frequencies.append(peak_freq)
+        else:
+            dominant_frequencies.append(None)
+    return dominant_frequencies
+
 
 # Load the data from the CSV file all_wells_cleaned.csv
 df_gw_st = pd.read_csv('data/all_well_imputation_cleaned.csv')
@@ -81,10 +94,36 @@ for station in df_gw_st.columns[1:6]:  # Skip the first column which is 'date ti
     fs = 24  # Sampling frequency in cycles per day
     filtered_signal = high_pass_filter(signal, cutoff, fs)
 
-    # Plot the detrended signal
-    plot_detrended_signal(signal, filtered_signal)
-
     # Identify the top 5 dominant frequencies
     top_freqs, top_powers = identify_top_dominant_frequencies(filtered_signal, top_n=5)
-    print('The top 5 dominant frequencies are:', top_freqs)
-    print('Their corresponding power values are:', top_powers)
+    #print(f'The top 5 dominant frequencies for {station} are:', top_freqs)
+    #print('Their corresponding power values are:', top_powers)
+
+    # create a dataframe to store the dominant frequencies including the station name
+    # station is the column name top_freqs is the column value
+    df_dominant_freq = pd.DataFrame({station: top_freqs})
+    print(f'Top 4 dominant frequencies for each {station}:', df_dominant_freq)
+
+    # Define the intervals
+    intervals = [(0.5, 1.5), (1.5, 2.5), (2.5, 3.5), (3.5, 4.5)]
+
+    # Perform the FFT
+    n = len(filtered_signal)
+    T = 1.0  # Sampling interval (1 hour)
+    fft_values = fft(filtered_signal)
+    fft_values = 2.0 / n * np.abs(fft_values[:n // 2])
+    freqs = fftfreq(n, T)[:n // 2]
+
+    # Convert from cph to cpd
+    freqs = freqs * 24
+
+    # Find the power spectrum
+    power_spectrum = np.abs(fft_values) ** 2
+
+    # Find the dominant frequency in each interval
+    dominant_frequencies = find_dominant_frequency_in_intervals(freqs, power_spectrum, intervals)
+    print(f'The dominant frequencies for {station} in each interval are:', dominant_frequencies)
+
+    # Create a dataframe to store the dominant frequencies in each interval
+    df_dominant_freq_intervals = pd.DataFrame({station: dominant_frequencies})
+    print(df_dominant_freq_intervals)

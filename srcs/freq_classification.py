@@ -140,3 +140,4 @@ for station in df_gw_st.columns[1:6]:  # Skip the first column which is 'date ti
         f'{station}_amplitude': dominant_amplitudes
     })
     print(df_dominant_freq_intervals)
+    

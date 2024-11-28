@@ -84,6 +84,7 @@ df_gw_st.set_index('date time', inplace=True)
 print(df_gw_st.head())
 
 # Apply the analysis to the first 5 stations in the dataframe
+results = []
 for station in df_gw_st.columns[1:6]:  # Skip the first column which is 'date time'
     print(f'Processing station: {station}')
     
@@ -141,4 +142,22 @@ for station in df_gw_st.columns[1:6]:  # Skip the first column which is 'date ti
     })
     print(df_dominant_freq_intervals)
 
+    # Classify the station
+    tolerance = 0.005
+    if any(abs(freq - 1.93) < tolerance for freq in dominant_frequencies if freq is not None) or \
+       any(abs(freq - 1.93) < tolerance for freq in top_freqs if freq is not None):
+        classification = 'tides'
+    else:
+        classification = 'pumping'
+    
+    results.append({
+        'Station': station,
+        'Top 5 Dominant Frequencies': top_freqs,
+        'Dominant Frequencies in Intervals': dominant_frequencies,
+        'Dominant Amplitudes in Intervals': dominant_amplitudes,
+        'Classification': classification
+    })
 
+# Convert results to DataFrame
+df_results = pd.DataFrame(results)
+print(df_results)

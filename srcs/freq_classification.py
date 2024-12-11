@@ -161,13 +161,13 @@ for station in df_gw_st.columns:  # Skip the first column which is 'date time'
         'Top 4 Dominant Amplitudes': top_amplitudes,
         'Dominant Frequencies in Intervals': dominant_frequencies,
         'Dominant Amplitudes in Intervals': dominant_amplitudes,
-        'Classification': classification
+        #'Classification': classification
     })
 
 
 # Convert results to DataFrame
 df_results = pd.DataFrame(results)
-print(df_results.head())
+#print(df_results.head())
 
 # create a dataframe for each station
 for station in df_results['Station']:
@@ -183,26 +183,37 @@ for station in df_results['Station']:
     
     )
     print(df_station)
-    sys.exit() 
-
-
-# add new colum 'amplitudes' to the dataframe and store
-# find the corresponding amplitudes for the top 5 dominant frequencies and the dominant frequencies in intervals from 
-# the dataframe df_results
-amplitudes = []
-for idx, row in df_results.iterrows():
-    top_amplitudes = row['Top 4 Dominant Amplitudes']
-    interval_amplitudes = row['Dominant Amplitudes in Intervals']
-    if any(abs(freq - 1.93) < tolerance for freq in row['Top 4 Dominant Frequencies'] if freq is not None):
-        idx = np.where(row['Top 4 Dominant Frequencies'] == 1.93)[0][0]
-        amplitudes.append(top_amplitudes[idx])
+    # classify the station
+    tolerance = 0.003
+    if any(abs(freq - 1.93) < tolerance for freq in df_station['Dominant Frequencies in Intervals'] if freq is not None) or \
+        any(abs(freq - 1.93) < tolerance for freq in df_station['Top 4 Dominant Frequencies'] if freq is not None):
+        classification = 'tides'
     else:
-        idx = np.where(row['Dominant Frequencies in Intervals'] == 1.93)[0][0]
-        amplitudes.append(interval_amplitudes[idx])
-df_results['Amplitudes'] = amplitudes
-print(df_results)
-#sys.exit()
+        classification = 'pumping'
+    print(f'Classification for station {station}: {classification}')
+    print('\n')
+    # get the corresponding amplitudes
+    # if classification is tides get corresponding amplitudes 
+    # and if classification is pumping the amplitude is the maximum
+    #  amplitude in the top 4 dominant amplitudes and the dominant amplitudes in intervals
 
+    if classification == 'tides':
+        idx = np.where(df_station['Dominant Frequencies in Intervals'] == 1.93)[0][0]
+        amplitude = df_station['Dominant Amplitudes in Intervals'][idx]
+    else:
+                amplitude = max(df_station['Top 4 Dominant amplitudes'].tolist() 
+                                + df_station['Dominant Amplitudes in Intervals'].tolist())
+
+    print(f'Amplitude for station {station}: {amplitude}')
+    print('\n')
+
+    # Create a dataframe to store the classification and amplitude
+    df_st_class = pd.DataFrame(
+        {'Station': station, 'Classification': classification, 'Amplitude': amplitude}, index=[0]
+    )
+    print(df_st_class)
+
+   
 # load the data from the CSV file df_input.csv
 df_input = pd.read_csv('data/df_input.csv')
 # change column name
@@ -210,38 +221,12 @@ df_input = df_input.rename(columns={'ST_NO': 'Station'})
 #print(df_input.head())
 
 # Ensure the 'Station' column in both DataFrames is of the same type
-df_results['Station'] = df_results['Station'].astype(str)
+df_st_class['Station'] = df_st_class['Station'].astype(str)
 df_input['Station'] = df_input['Station'].astype(str)
 
 # Merge df_results with df_input to add TM_X97 and TM_Y97 columns
-df_results = df_results.merge(df_input[['Station', 'TM_X97', 'TM_Y97']], on='Station', how='left')
-#print(df_results)
-
-# drop columns top 5 dominant frequencies and dominant frequencies in intervals
-df_results = df_results.drop(columns=['Top 4 Dominant Frequencies', 'Dominant Frequencies in Intervals'])
+df_class = df_st_class.merge(df_input[['Station', 'TM_X97', 'TM_Y97']], on='Station', how='left')
 # bring column classification to the end3
-df_results = df_results[['Station', 'TM_X97', 'TM_Y97', 'Classification']]
-#  drop rows with nan values
-df_results = df_results.dropna()
-print(df_results)
+df_class = df_class[['Station', 'TM_X97', 'TM_Y97', 'Classification']]
+print(df_class.head())
 
-
-# print tide stations
-tide_stations = df_results[df_results['Classification'] == 'tides']
-#print(tide_stations)
-
-# Add the amplitude for the frequency corresponding to tide (1.93 cpd)
-# applitudes are in the column 'Top 5 Dominant Amplitudes' and 'dominant amplitudes in intervals'
-# Add a new column 'Tide Amplitude' to df_results
-tide_amplitudes = []
-for idx, row in tide_stations.iterrows():
-    top_amplitudes = row['Top 5 Dominant Amplitudes']
-    interval_amplitudes = row['Dominant Amplitudes in Intervals']
-    if any(abs(freq - 1.93) < tolerance for freq in row['Top 5 Dominant Frequencies'] if freq is not None):
-        idx = np.where(row['Top 5 Dominant Frequencies'] == 1.93)[0][0]
-        tide_amplitudes.append(top_amplitudes[idx])
-    else:
-        idx = np.where(row['Dominant Frequencies in Intervals'] == 1.93)[0][0]
-        tide_amplitudes.append(interval_amplitudes[idx])
-tide_stations['Tide Amplitude'] = tide_amplitudes
-print(tide_stations)

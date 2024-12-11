@@ -106,7 +106,7 @@ for station in df_gw_st.columns:  # Skip the first column which is 'date time'
     filtered_signal = high_pass_filter(signal, cutoff, fs)
 
     # Identify the top 5 dominant frequencies
-    top_freqs, top_powers, top_amplitudes = identify_top_dominant_frequencies(filtered_signal, top_n=5)
+    top_freqs, top_powers, top_amplitudes = identify_top_dominant_frequencies(filtered_signal, top_n=4)
     #print(f'The top 5 dominant frequencies for {station} are:', top_freqs)
     #print('Their corresponding power values are:', top_powers)
 
@@ -145,8 +145,6 @@ for station in df_gw_st.columns:  # Skip the first column which is 'date time'
     
     #print(f'The dominant frequencies for {station}') 
 
-    
-
     # Classify the station
     tolerance = 0.003
     if any(abs(freq - 1.93) < tolerance for freq in dominant_frequencies if freq is not None) or \
@@ -158,33 +156,52 @@ for station in df_gw_st.columns:  # Skip the first column which is 'date time'
     # Store the results
     results.append({
         'Station': station,
-        'Top 5 Dominant Frequencies': top_freqs,
-        'Top 5 Dominant Powers': top_powers,
-        'Top 5 Dominant Amplitudes': top_amplitudes,
+        'Top 4 Dominant Frequencies': top_freqs,
+        'Top 4 Dominant Powers': top_powers,
+        'Top 4 Dominant Amplitudes': top_amplitudes,
         'Dominant Frequencies in Intervals': dominant_frequencies,
         'Dominant Amplitudes in Intervals': dominant_amplitudes,
         'Classification': classification
     })
 
+
 # Convert results to DataFrame
 df_results = pd.DataFrame(results)
-print(df_results.columns)
+print(df_results.head())
+
+# create a dataframe for each station
+for station in df_results['Station']:
+    print(f'Processing station: {station}')
+    # create dataframe 
+    df_station = pd.DataFrame(
+        {
+            'Top 4 Dominant Frequencies': df_results[df_results['Station'] == station]['Top 4 Dominant Frequencies'].values[0],
+            'Top 4 Dominant amplitudes': df_results[df_results['Station'] == station]['Top 4 Dominant Amplitudes'].values[0],
+            'Dominant Frequencies in Intervals': df_results[df_results['Station'] == station]['Dominant Frequencies in Intervals'].values[0],
+            'Dominant Amplitudes in Intervals': df_results[df_results['Station'] == station]['Dominant Amplitudes in Intervals'].values[0],
+        }
+    
+    )
+    print(df_station)
+    sys.exit() 
+
+
 # add new colum 'amplitudes' to the dataframe and store
 # find the corresponding amplitudes for the top 5 dominant frequencies and the dominant frequencies in intervals from 
 # the dataframe df_results
 amplitudes = []
 for idx, row in df_results.iterrows():
-    top_amplitudes = row['Top 5 Dominant Amplitudes']
+    top_amplitudes = row['Top 4 Dominant Amplitudes']
     interval_amplitudes = row['Dominant Amplitudes in Intervals']
-    if any(abs(freq - 1.93) < tolerance for freq in row['Top 5 Dominant Frequencies'] if freq is not None):
-        idx = np.where(row['Top 5 Dominant Frequencies'] == 1.93)[0][0]
+    if any(abs(freq - 1.93) < tolerance for freq in row['Top 4 Dominant Frequencies'] if freq is not None):
+        idx = np.where(row['Top 4 Dominant Frequencies'] == 1.93)[0][0]
         amplitudes.append(top_amplitudes[idx])
     else:
         idx = np.where(row['Dominant Frequencies in Intervals'] == 1.93)[0][0]
         amplitudes.append(interval_amplitudes[idx])
 df_results['Amplitudes'] = amplitudes
 print(df_results)
-sys.exit()
+#sys.exit()
 
 # load the data from the CSV file df_input.csv
 df_input = pd.read_csv('data/df_input.csv')
@@ -201,7 +218,7 @@ df_results = df_results.merge(df_input[['Station', 'TM_X97', 'TM_Y97']], on='Sta
 #print(df_results)
 
 # drop columns top 5 dominant frequencies and dominant frequencies in intervals
-df_results = df_results.drop(columns=['Top 5 Dominant Frequencies', 'Dominant Frequencies in Intervals'])
+df_results = df_results.drop(columns=['Top 4 Dominant Frequencies', 'Dominant Frequencies in Intervals'])
 # bring column classification to the end3
 df_results = df_results[['Station', 'TM_X97', 'TM_Y97', 'Classification']]
 #  drop rows with nan values

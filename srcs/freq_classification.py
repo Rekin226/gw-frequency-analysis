@@ -82,36 +82,6 @@ df_gw_st.columns = df_gw_st.columns.str.lstrip('0')
 print(df_gw_st.head())
 
 
-'''
-# load shp file gwobwell_e.shp
-sf = shp.Reader('data/gwobwell_e/gwobwell_e.shp')
-# open the attribute table as df_meta0
-df_meta0 = pd.DataFrame(sf.records(), columns=[field[0] for field in sf.fields[1:]])
-# filter based the GW_ZONE to '濁水溪沖積扇'
-df_meta = df_meta0[df_meta0['GW_ZONE'] == '濁水溪沖積扇']
-# drop the columns and keep only the columns 'NAME_C', 'ST_NO', 'TM_X97', 'TM_Y97'
-df_meta = df_meta[['ST_NO', 'NAME_C', 'TM_X97', 'TM_Y97']]
-# Drop the first 0 from the station values
-df_meta['ST_NO'] = df_meta['ST_NO'].str.lstrip('0')
-# drop rows starting with '8' and '1' in the 'ST_NO' column
-df_meta = df_meta[~df_meta['ST_NO'].str.startswith(('8', '1'))]
-print('df_meta:', df_meta)
-
-# load the shapefile gwobwell_a.shp
-sf = shp.Reader('data/gwobwell_a/gwobwell_a.shp')
-# open the attribute table as df_meta01
-df_meta01 = pd.DataFrame(sf.records(), columns=[field[0] for field in sf.fields[1:]])
-# filter based the GW_ZONE to '濁水溪沖積扇'
-df_meta1 = df_meta01[df_meta01['GW_ZONE'] == '濁水溪沖積扇']
-# drop the columns and keep only the columns 'NAME_C', 'ST_NO', 'TM_X97', 'TM_Y97'
-df_meta1 = df_meta1[['ST_NO', 'NAME_C', 'TM_X97', 'TM_Y97']]
-# Drop the first 0 from the station values
-df_meta1['ST_NO'] = df_meta1['ST_NO'].str.lstrip('0')
-# drop rows starting with '8' and '1' in the 'ST_NO' column
-df_meta1 = df_meta1[~df_meta1['ST_NO'].str.startswith(('8', '1'))]
-print('df_meta1:', df_meta1) 
-'''
-
 def process_shapefile(sf, zone):
     df_meta = pd.DataFrame(sf.records(), columns=[field[0] for field in sf.fields[1:]])
     df_meta = df_meta[df_meta['GW_ZONE'] == zone]
@@ -150,9 +120,9 @@ for index, row in df_meta.iterrows():
 
 # rename the column 'ST_NO' to 'Station'
 df_input.rename(columns={'ST_NO': 'Station'}, inplace=True)
-print('df_input:', df_input)
+#print('df_input:', df_input)
 # print the station with none values
-print('df_input with None values:', len(df_input[df_input.isnull().any(axis=1)]))
+#print('df_input with None values:', len(df_input[df_input.isnull().any(axis=1)]))
 #sys.exit()
 
 
@@ -160,6 +130,7 @@ print('df_input with None values:', len(df_input[df_input.isnull().any(axis=1)])
 # Apply the analysis to the first 5 stations in the dataframe
 results = []
 df_tides = pd.DataFrame(columns=['Station', 'Frequency', 'Amplitude'])
+df_top1_freqs = pd.DataFrame(columns=['station', 'Frequency', 'Amplitude'])
 
 for station in df_gw_st.columns:  # Skip the first column which is 'date time'
     #print(f'Processing station: {station}')
@@ -174,8 +145,12 @@ for station in df_gw_st.columns:  # Skip the first column which is 'date time'
 
     # Identify the top 5 dominant frequencies
     df_top_freqs = identify_top_dominant_frequencies(filtered_signal, top_n=5)
-    #print(f'The top 4 dominant frequencies for {station} are:', df_top_freqs)
+    #print(f'The top 5 dominant frequencies for {station} are:', df_top_freqs)
     
+    # store the top 1 dominant frequency and its amplitude in a dataframe df_top1_freqs
+    df_top1 = pd.DataFrame({'station': station, 'Frequency': df_top_freqs['Frequency'][0], 'Amplitude': df_top_freqs['Amplitude'][0]}, index=[0])
+    df_top1_freqs = pd.concat([df_top1_freqs, df_top1], ignore_index=True)
+
     # Find index of the frequency close to 1.93 with tolerance 0.003
     idx = np.where(np.isclose(df_top_freqs['Frequency'], 1.93, atol=0.003))[0]
     if len(idx) > 0:
@@ -190,24 +165,40 @@ for station in df_gw_st.columns:  # Skip the first column which is 'date time'
 # print df_tides
 #print('df_tides:', df_tides)
 
+# print df_top1_freqs
+#print('df_top1_freqs:', df_top1_freqs)
+
+# merge df_top1_freqs with df_input to add TM_X97 and TM_Y97 columns
+df_top1_freqs = df_top1_freqs.merge(df_input[['Station','NAME_C' , 'TM_X97', 'TM_Y97']], left_on='station', right_on='Station', how='left')
+# bring column classification to the end
+df_top1_freqs = df_top1_freqs[['station', 'TM_X97', 'TM_Y97', 'Frequency', 'Amplitude']]
+
+# print the top five stations with the highest amplitude
+df_top1_freqs = df_top1_freqs.sort_values(by='Amplitude', ascending=False).head(10)
+print('df_top1_freqs:', df_top1_freqs)
+
+
 
 # Ensure the 'Station' column in both DataFrames is of the same type
 df_tides['Station'] = df_tides['Station'].astype(str)
 df_input['Station'] = df_input['Station'].astype(str)
 
 # Merge df_tides with df_input to add TM_X97 and TM_Y97 columns
-df_tides = df_tides.merge(df_input[['Station', 'TM_X97', 'TM_Y97']], on='Station', how='left')
+df_tides = df_tides.merge(df_input[['Station','NAME_C' , 'TM_X97', 'TM_Y97']], on='Station', how='left')
 # bring column classification to the end
 df_tides = df_tides[['Station', 'TM_X97', 'TM_Y97', 'Frequency', 'Amplitude']]
 #print(df_tides.head())
 
 # classify df_tides based on the amplitude into 'sea tides' and 'earth tides'
-df_tides['Classification'] = np.where(df_tides['Amplitude'] > 0.05, 'Sea Tides', 'Earth Tides')
+df_tides['Classification'] = np.where(df_tides['Amplitude'] > 0.03, 'Sea Tides', 'Earth Tides')
 #print('df_tides:', df_tides)
 
 # print sea tides
 sea_tides = df_tides[df_tides['Classification'] == 'Sea Tides']
-print('sea_tides:', sea_tides)
+#print('sea_tides:', sea_tides)
+
+# save as csv file
+#sea_tides.to_csv('workspace/sea_tides.csv', index=False)
     
 
 

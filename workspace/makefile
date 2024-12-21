@@ -13,3 +13,9 @@ test_amt:
 test_tides:
 	python ../srcs/input_tides_model.py 									\
 		../data/input_sea_tides.csv
+
+
+post_analysis:
+	python ../srcs/post_analysis.py 									\
+		sid=7050121 dfid=df_tides_7050121								\
+		data_path=tides_stations

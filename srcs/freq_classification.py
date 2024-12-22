@@ -79,7 +79,7 @@ df_gw_st.set_index('date time', inplace=True)
 # drop the first 0 from the station values 
 df_gw_st.columns = df_gw_st.columns.str.lstrip('0')
 # print the first 5 rows
-print(df_gw_st.head())
+print(df_gw_st)
 
 
 def process_shapefile(sf, zone):
@@ -174,8 +174,12 @@ df_top1_freqs = df_top1_freqs.merge(df_input[['Station','NAME_C' , 'TM_X97', 'TM
 df_top1_freqs = df_top1_freqs[['station', 'TM_X97', 'TM_Y97', 'Frequency', 'Amplitude']]
 
 # print the top five stations with the highest amplitude
-df_top1_freqs = df_top1_freqs.sort_values(by='Amplitude', ascending=False).head(10)
+df_top1_freqs = df_top1_freqs.sort_values(by='Amplitude', ascending=False)  #.head(10)
 print('df_top1_freqs:', df_top1_freqs)
+# print stations with frequency=2 in df_top1_freqs and length of the dataframe
+df_top1_freqs_2 = df_top1_freqs[df_top1_freqs['Frequency'] == 2]
+print('length of df_top1_freqs_2:', len(df_top1_freqs_2))
+print('df_top1_freqs_2:', df_top1_freqs_2)
 
 
 
@@ -187,7 +191,7 @@ df_input['Station'] = df_input['Station'].astype(str)
 df_tides = df_tides.merge(df_input[['Station','NAME_C' , 'TM_X97', 'TM_Y97']], on='Station', how='left')
 # bring column classification to the end
 df_tides = df_tides[['Station', 'TM_X97', 'TM_Y97', 'Frequency', 'Amplitude']]
-#print(df_tides.head())
+print(df_tides.head())
 
 # classify df_tides based on the amplitude into 'sea tides' and 'earth tides'
 df_tides['Classification'] = np.where(df_tides['Amplitude'] > 0.03, 'Sea Tides', 'Earth Tides')
@@ -195,10 +199,17 @@ df_tides['Classification'] = np.where(df_tides['Amplitude'] > 0.03, 'Sea Tides',
 
 # print sea tides
 sea_tides = df_tides[df_tides['Classification'] == 'Sea Tides']
+# add a column 'active' to the dataframe and set it to 0
+sea_tides["active"] = 0
+# drop frequency, classification, and amplitude columns
+sea_tides.drop(columns=["Frequency", "Amplitude", 'Classification'], inplace=True)
+# add a column 'tank_size' to the dataframe and set it to 3 and freq_type to 'DAILY'
+sea_tides["tank_size"] = 3
+sea_tides["freq_type"] = 'DAILY'
 #print('sea_tides:', sea_tides)
 
 # save as csv file
-#sea_tides.to_csv('workspace/sea_tides.csv', index=False)
+#sea_tides.to_csv('data/input_sea_tides.csv', index=False)
     
 
 

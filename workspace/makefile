@@ -19,3 +19,7 @@ post_analysis:
 	python ../srcs/post_analysis.py 									\
 		sid=7050121 dfid=df_tides_7050121								\
 		data_path=tides_stations
+
+post_analysis2:
+	python ../srcs/csv_post_analysis.py 									\
+		../data/csv_post_analysis.csv

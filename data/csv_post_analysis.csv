@@ -1,0 +1,3 @@
+sid,dfid,model_type,data_path,active
+7050121,df_tides_7050121.csv,tides,tides_stations,1
+7050141,df_tides_7050141.csv,tides,tides_stations,0

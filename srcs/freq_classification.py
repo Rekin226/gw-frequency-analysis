@@ -49,7 +49,7 @@ def find_dominant_frequency_in_intervals(freqs, power_spectrum, intervals):
             dominant_amplitudes.append(None)
     return dominant_frequencies, dominant_amplitudes
 
-def identify_top_dominant_frequencies(signal, top_n=5):
+def identify_top_dominant_frequencies(signal, top_n=1):
     # Perform the FFT
     n = len(signal)
     T = 1.0  # Sampling interval (1 hour)
@@ -67,7 +67,7 @@ def identify_top_dominant_frequencies(signal, top_n=5):
     # Identify the top N dominant frequencies
     top_indices = np.argsort(power_spectrum)[-top_n:][::-1]
     top_freqs = freqs[top_indices]
-    top_powers = power_spectrum[top_indices]
+    #top_powers = power_spectrum[top_indices]
     top_amplitudes = fft_values[top_indices]
 
     # create a dataframe to store the top frequencies and their corresponding amplitudes
@@ -105,8 +105,6 @@ def process_shapefile(sf, zone):
     df_meta['ST_NO'] = df_meta['ST_NO'].str.lstrip('0')
     df_meta = df_meta[~df_meta['ST_NO'].str.startswith(('8', '1'))]
     return df_meta
-
-
 
 def main():
     # Data Ingestion with robust input validation
@@ -175,7 +173,6 @@ def main():
 
     # Prepare DataFrames for frequency analysis
     df_tides = pd.DataFrame(columns=['Station', 'Frequency', 'Amplitude'])
-    df_top1_freqs = pd.DataFrame(columns=['station', 'Frequency', 'Amplitude'])
 
     for station in df_gw_st.columns:  # Skip the first column which is 'date time'
         # Extract the signal
@@ -190,29 +187,13 @@ def main():
         # Identify the top 5 dominant frequencies
         df_top_freqs = identify_top_dominant_frequencies(filtered_signal, top_n=5)
         
-        # store the top 1 dominant frequency and its amplitude
-        df_top1 = pd.DataFrame({'station': station, 'Frequency': df_top_freqs['Frequency'][0],
-                                'Amplitude': df_top_freqs['Amplitude'][0]}, index=[0])
-        df_top1_freqs = pd.concat([df_top1_freqs, df_top1], ignore_index=True)
-
         # Identify tidal candidates using the helper function
         tidal_candidates = detect_tidal_candidates(df_top_freqs, station)
         if tidal_candidates:
             for candidate in tidal_candidates:
                 df_tides = pd.concat([df_tides, pd.DataFrame([candidate])], ignore_index=True)
 
-    # merge df_top1_freqs with df_input to add TM_X97 and TM_Y97 columns
-    df_top1_freqs = df_top1_freqs.merge(df_input[['Station','NAME_C' , 'TM_X97', 'TM_Y97']], left_on='station', right_on='Station', how='left')
-    # bring column classification to the end
-    df_top1_freqs = df_top1_freqs[['station', 'TM_X97', 'TM_Y97', 'Frequency', 'Amplitude']]
 
-    # print the top five stations with the highest amplitude
-    df_top1_freqs = df_top1_freqs.sort_values(by='Amplitude', ascending=False)
-    logging.info('df_top1_freqs: %s', df_top1_freqs)
-    # print stations with frequency=2 in df_top1_freqs and length of the dataframe
-    df_top1_freqs_2 = df_top1_freqs[df_top1_freqs['Frequency'] == 2]
-    logging.info('length of df_top1_freqs_2: %s', len(df_top1_freqs_2))
-    logging.info('df_top1_freqs_2: %s', df_top1_freqs_2)
 
     # Ensure the 'Station' column in both DataFrames is of the same type
     df_tides['Station'] = df_tides['Station'].astype(str)
@@ -225,12 +206,6 @@ def main():
     df_tides = df_tides[['Station', 'TM_X97', 'TM_Y97', 'Frequency', 'Amplitude']]
     #logging.info('df_tides head: %s', df_tides.head())
 
-    # classify df_tides based on the amplitude into 'sea tides' and 'earth tides'
-    #df_tides['Classification'] = np.where(df_tides['Amplitude'] > 0.03, 'Sea Tides', 'Earth Tides')
-    # save the classified data to a csv file
-    #df_tides.to_csv('df_tides_sea_earth.csv', index=False)
-
-
 
     # Calculate the median and interquartile range (IQR) of the amplitude
     median_amp = df_tides['Amplitude'].median()
@@ -242,38 +217,24 @@ def main():
     threshold = q3 + 1.5 * iqr
 
     # Classify df_tides based on the calculated threshold
-    df_tides['Classification'] = np.where(df_tides['Amplitude'] > threshold, 'Sea Tides', 'Earth Tides')
+    df_tides['Classification'] = np.where(df_tides['Amplitude'] > threshold, 'Sea Tides', 'other')
+    # group the df_tides by based on amplitude
+    df_tides['Amplitude_Group'] = np.where(df_tides['Amplitude'] > threshold, 'High Amplitude', 'Low Amplitude')
+    # group the amplitude by descending order
+    df_tides.sort_values(by=['Amplitude'], ascending=False, inplace=True)
+    # reset the index
+    df_tides.reset_index(drop=True, inplace=True)
     logging.info('df_tides after classification: %s', df_tides)
     # save the classified data to a csv file
-    df_tides.to_csv('df_tides_sea_earth.csv', index=False)
+    df_tides.to_csv('../workspace/df_tides_classif.csv', index=False)
 
-
-
-    # print the df_sea_tides
-    df_sea_tides = df_tides[df_tides['Classification'] == 'Sea Tides']
-    # Group stations in df_sea_tides based on amplitude
-    median_amp = df_sea_tides['Amplitude'].median()
-    df_sea_tides['Amplitude_Group'] = np.where(df_sea_tides['Amplitude'] > median_amp, 'High Amplitude', 'Low Amplitude')
-    logging.info('df_sea_tides: %s', df_sea_tides)
-
-    # Remove duplicate stations with same TM_X97 and TM_Y97 by keeping station with maximum amplitude
-    df_sea_tides = df_sea_tides.loc[df_sea_tides.groupby(['TM_X97', 'TM_Y97'])['Amplitude'].idxmax()]
-    logging.info("df_sea_tides after removing duplicates by max amplitude:\n%s", df_sea_tides)
-
-    # Identify stations in df_sea_tides with duplicate TM_X97 and TM_Y97 coordinates
-    duplicates_sea_tides = df_sea_tides[df_sea_tides.duplicated(subset=['TM_X97', 'TM_Y97'], keep=False)]
-    if not duplicates_sea_tides.empty:
-        logging.info("Stations in df_sea_tides with duplicate coordinates:\n%s", duplicates_sea_tides.sort_values(['TM_X97', 'TM_Y97']))
-
-    # print the classified sea tides and earth tides
-    #logging.info('df_tides: %s', df_tides)
 
     # print sea tides
     sea_tides = df_tides[df_tides['Classification'] == 'Sea Tides'].copy()  # Use .copy() to avoid SettingWithCopyWarning
     # print the sea tides
     logging.info('sea_tides: %s', sea_tides)
     # save the sea tides to a csv file in tides_analysis folder
-    sea_tides.to_csv('sea_tides.csv', index=False)
+    sea_tides.to_csv('../workspace/tides_analysis/classif_sea_tides.csv', index=False)
     sea_tides["active"] = 0
     # drop frequency, classification, and amplitude columns
     sea_tides.drop(columns=["Frequency", "Amplitude", "Classification"], inplace=True)

@@ -31,6 +31,61 @@ def high_pass_filter(data, cutoff, fs, order=5):
     filtered_data = filtfilt(b, a, data)
     return filtered_data
 
+
+# create a function to perform the FFT for each well in df and plot the results
+def fft_plot(station_data, station_name, cutoff, fs, order):
+    """
+    Perform the FFT of the input signal and plot the results.
+    """
+    # Convert the pandas Series to a numpy array
+    station_data_array = station_data.to_numpy()
+
+    '''
+        for station in df.columns:
+        station_data = df[station].dropna()
+        if len(station_data) < 2:
+            continue
+    '''
+    # Convert the pandas Series to a numpy array
+    station_data_array = station_data.to_numpy()
+
+    # apply high-pass filter
+    filtered_data = high_pass_filter(station_data_array, cutoff, fs, order)
+
+    # perform the FFT
+    n = len(filtered_data)
+    T = 1.0 # sampling interval (1 hour)
+
+    fft_values = fft(filtered_data)
+    fft_values = 2.0/n * np.abs(fft_values[:n//2])
+    freq = fftfreq(n, T)
+
+    # Only plot the positive frequencies
+    magnitude = np.abs(fft_values)
+    positive_freq_indice = np.where(freq > 0)
+    positive_freq = freq[positive_freq_indice]
+    positive_fft_values = magnitude[positive_freq_indice]
+
+    # convert from cph to cpd
+    positive_freq = positive_freq * 24
+    
+
+    # plot the FFT
+    plt.figure(figsize=(6, 8))
+    plt.plot(positive_freq, positive_fft_values)
+    plt.title(f'FFT of {station_name}')
+    plt.xlabel('Frequency (cycles per day)')
+    plt.ylabel('Amplitude')
+    plt.xticks([1, 2, 3, 4, 5, 6])
+    plt.xlim(0, 6)
+    plt.grid()
+    plt.show()
+
+    # Save the FFT plot
+    #plt.savefig(f'{output_dir}{station_name}_fft.png')
+    #plt.close()
+
+
 def find_dominant_frequency_in_intervals(freqs, power_spectrum, intervals):
     dominant_frequencies = []
     dominant_amplitudes = []
@@ -116,6 +171,16 @@ def main():
     df_gw_st.set_index('date time', inplace=True)
     df_gw_st.columns = df_gw_st.columns.str.lstrip('0')
     
+    # create df3 from df_gw_st for the first 3 columns and date time as index
+    df3 = df_gw_st.iloc[:, :3].copy()
+    df3.index = pd.to_datetime(df3.index)
+    df3.columns = df3.columns.str.lstrip('0')
+    # from 2012-01-01 to 2014-12-31
+    df3 = df3.loc['2012-01-01':'2014-12-31']
+    print(df3)
+    # save df3 to csv file
+    df3.to_csv('../workspace/df3.csv', index=True)
+    
 
     zone = '濁水溪沖積扇'
     try:
@@ -186,7 +251,10 @@ def main():
 
         # Identify the top 5 dominant frequencies
         df_top_freqs = identify_top_dominant_frequencies(filtered_signal, top_n=5)
-        
+        if station in ["9130311", "9050111", "7230211", "9130211", "7240212"]:
+            df_target = df_top_freqs[['Frequency', 'Amplitude']].copy()
+            print(f"Top 5 dominant frequencies and amplitudes for station {station}:")
+            print(df_target)
         # Identify tidal candidates using the helper function
         tidal_candidates = detect_tidal_candidates(df_top_freqs, station)
         if tidal_candidates:
@@ -243,6 +311,8 @@ def main():
     sea_tides["freq_type"] = 'DAILY'
     #logging.info('sea_tides: %s', sea_tides)
 
+
+
     # add a column 'tank_size' to df_input and set it to 3 and freq_type to 'DAILY' and remove the column 'NAME_C'
     #df_input["tank_size"] = 3
     #df_input["freq_type"] = 'DAILY'
@@ -252,6 +322,53 @@ def main():
     #print(df_input)
     # save df_input to csv file
     #df_input.to_csv('df_input.csv', index=False)
+
+    # Perform FFT for each station classified as 'Sea Tides' and plot in the same subplot
+    # Create a subplot for all stations classified as 'Sea Tides'
+    num_stations = len(sea_tides['Station'])
+    num_cols = 2
+    num_rows = (num_stations + num_cols - 1) // num_cols  # Calculate rows needed for 2 columns
+    fig, axes = plt.subplots(num_rows, num_cols, figsize=(20, 5 * num_rows), sharex=True, sharey=True)
+
+    # Flatten axes for easier indexing
+    axes = axes.flatten()
+
+    for i, station in enumerate(sea_tides['Station']):
+        # Extract the signal
+        signal = df_gw_st[station].values
+
+        # Perform FFT
+        station_data_array = pd.Series(signal).to_numpy()
+        filtered_data = high_pass_filter(station_data_array, cutoff, fs, filter_order)
+        n = len(filtered_data)
+        T = 1.0  # Sampling interval (1 hour)
+        fft_values = fft(filtered_data)
+        fft_values = 2.0 / n * np.abs(fft_values[:n // 2])
+        freq = fftfreq(n, T)
+        positive_freq_indice = np.where(freq > 0)
+        positive_freq = freq[positive_freq_indice] * 24  # Convert from cph to cpd
+        positive_fft_values = fft_values[positive_freq_indice]
+
+        # Plot the FFT in the subplot
+        ax = axes[i]
+        ax.plot(positive_freq, positive_fft_values)
+        ax.set_title(f'FFT - {station}', fontsize=16)
+        ax.set_xlabel('Frequency (cpd)', fontsize=14)
+        ax.set_ylabel('Amplitude (m)', fontsize=14)
+        ax.set_xticks([1, 2, 3, 4, 5, 6])
+        ax.set_xlim(0, 6)
+        ax.grid()
+        ax.tick_params(axis='both', which='major', labelsize=12)
+
+    # Hide any unused subplots
+    for j in range(i + 1, len(axes)):
+        fig.delaxes(axes[j])
+
+    # Adjust layout and save the combined plot
+    plt.tight_layout()
+    #plt.savefig('../workspace/tides_analysis/combined_fft_plot.tiff', dpi=600)
+    #plt.show()
+    
 
 
 if __name__ == "__main__":

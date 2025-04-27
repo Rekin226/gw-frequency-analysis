@@ -17,10 +17,11 @@ SEMIDIURNAL_FREQS = {
     'S2': 2.0000
 }
 
-DIURNAL_FREQS = {
-    'K1': 1.0027,
-    'O1': 0.9295
-}
+# DIURNAL_FREQS dictionary removed as K1 and O1 are no longer targeted.
+# DIURNAL_FREQS = {
+#     'K1': 1.0027,
+#     'O1': 0.9295
+# }
 
 # Create a high-pass filter function
 def high_pass_filter(data, cutoff, fs, order=5):
@@ -30,7 +31,7 @@ def high_pass_filter(data, cutoff, fs, order=5):
     filtered_data = filtfilt(b, a, data)
     return filtered_data
 
-def fft_plot(station_data, station_name, cutoff, fs, order, candidates=None, ax=None):
+def fft_plot(station_data, station_name, cutoff, fs, order, candidates=None, ax=None): # candidates parameter is kept but annotation logic changes
     if isinstance(station_data, pd.Series):
         station_data_array = station_data.to_numpy()
     else:
@@ -48,15 +49,48 @@ def fft_plot(station_data, station_name, cutoff, fs, order, candidates=None, ax=
         ax = plt.gca()
     ax.plot(freq, fft_values, label='FFT amplitude')
     
-    if candidates:
-        for candidate in candidates:
-            freq_candidate = candidate['Frequency']
-            tide_name = candidate['Tide_Name']
-            ax.axvline(x=freq_candidate, linestyle='--', color='red', alpha=0.7)
-            y_max = np.max(fft_values)
-            ax.text(freq_candidate + 0.1, y_max * 0.8, f"{tide_name}\n{freq_candidate:.3f}", 
-                    color='red', fontsize=8)
+    # Explicitly annotate M2 and S2 if peaks are found near their target frequencies
+    target_tides_to_annotate = {
+        'M2': 1.9323,
+        'S2': 2.0000
+    }
     
+    tolerance = 0.05 # Tolerance window (in cpd) to find the peak near the target frequency
+    
+    # Find max amplitude in the relevant frequency range for positioning text
+    freq_mask_plot = (freq > 0.5) & (freq < 6)
+    y_max_plot = np.max(fft_values[freq_mask_plot]) if np.any(freq_mask_plot) else np.max(fft_values)
+    # Determine y-position for vertical frequency labels (e.g., halfway up the plot)
+    y_min_plot, current_y_max = ax.get_ylim() # Get current y-limits
+    # Ensure y_max_plot is used if it's higher than current_y_max (in case ylim is not auto-updated yet)
+    effective_y_max = max(y_max_plot, current_y_max) 
+    freq_label_y_pos = y_min_plot + (effective_y_max - y_min_plot) * 0.5 # Position label halfway up
+
+    for tide_name, target_freq in target_tides_to_annotate.items():
+        # Add vertical dashed line at the target frequency
+        ax.axvline(x=target_freq, linestyle='--', color='grey', alpha=0.7)
+        
+        # Add the target frequency label vertically along the line
+        ax.text(target_freq, freq_label_y_pos, f"{target_freq:.3f} cpd", 
+                color='grey', fontsize=7, rotation=90, 
+                verticalalignment='center', horizontalalignment='right') # Adjust ha/va for placement relative to line
+
+        # Find the index of the frequency in the FFT results closest to the target frequency
+        freq_diff = np.abs(freq - target_freq)
+        closest_idx = np.argmin(freq_diff)
+        
+        # Check if the closest frequency is within the tolerance AND has significant amplitude
+        min_amp_threshold = effective_y_max * 0.1 # Use effective_y_max for threshold
+        if freq_diff[closest_idx] <= tolerance and fft_values[closest_idx] > min_amp_threshold:
+            actual_freq_peak = freq[closest_idx]
+            actual_amp_peak = fft_values[closest_idx]
+            
+            # Annotate the Tide Name (M2/S2) horizontally at the peak
+            ax.text(actual_freq_peak + 0.05, actual_amp_peak, f"{tide_name}", 
+                    color='red', fontsize=9, weight='bold', verticalalignment='bottom', horizontalalignment='left')
+            # Optionally add a small marker at the peak
+            ax.plot(actual_freq_peak, actual_amp_peak, 'ro', markersize=4, alpha=0.7) 
+
     ax.set_title(f'FFT of {station_name}', fontsize=12)
     ax.set_xlabel('Frequency (cycles per day)', fontsize=10)
     ax.set_ylabel('Amplitude', fontsize=10)
@@ -80,13 +114,12 @@ def identify_top_dominant_frequencies(signal, top_n=5):
 
 def detect_tidal_candidates_group(df_top_freqs, station, target_dict, tolerance=0.001, amplitude_threshold=0.001):
     """
-    Identify tidal candidates for a given group (semi-diurnal or diurnal).
-    For K1, the tolerance is forced to 0.0001 (exact match) to avoid confusion with a pumping signal.
+    Identify tidal candidates for a given group (semi-diurnal).
     """
     candidates_list = []
     for tide_name, target_freq in target_dict.items():
-        # Use an exact (or near-exact) match for K1 and provided tolerance for others.
-        current_tolerance = 0.0001 if tide_name == 'K1' else tolerance
+        # Use provided tolerance for all tides now.
+        current_tolerance = tolerance
         lower_bound = target_freq - current_tolerance
         upper_bound = target_freq + current_tolerance
         mask = (df_top_freqs['Frequency'] >= lower_bound) & (df_top_freqs['Frequency'] <= upper_bound)
@@ -100,21 +133,32 @@ def detect_tidal_candidates_group(df_top_freqs, station, target_dict, tolerance=
                     'Amplitude': candidate['Amplitude'],
                     'Target_Freq': target_freq,
                     'Tide_Name': tide_name,
-                    'Group': 'Semi-Diurnal' if tide_name in SEMIDIURNAL_FREQS else 'Diurnal'
+                    'Group': 'Semi-Diurnal' # Only Semi-Diurnal group remains
                 }
                 candidates_list.append(candidate_data)
     return candidates_list
 
 def red_flag_checks(df_top_freqs, candidates_list, station, flag_tolerance=0.001):
     red_flags = []
-    # Flag peaks near 1.0 cpd (e.g., pumping/ET)
+    # Flag peaks near 1.0 cpd (e.g., pumping/ET) - K1 check removed
     mask_1 = (df_top_freqs['Frequency'] >= (1.0 - flag_tolerance)) & (df_top_freqs['Frequency'] <= (1.0 + flag_tolerance))
     if not df_top_freqs[mask_1].empty:
-        red_flags.append("Peak at ~1.0 cpd detected (could be pumping/ET). Flag for manual review.")
-    # Flag 2.0 cpd peak if no M2 candidate is found
+        # Check if this peak corresponds to a classified tide (should not happen now without K1)
+        is_classified_tide = False
+        for candidate in candidates_list:
+             if abs(candidate['Frequency'] - 1.0) <= flag_tolerance:
+                 is_classified_tide = True
+                 break
+        if not is_classified_tide:
+             red_flags.append("Peak at ~1.0 cpd detected (could be pumping/ET). Flag for manual review.")
+
+    # Flag 2.0 cpd peak if no M2 candidate is found (S2 check remains)
     mask_2 = (df_top_freqs['Frequency'] >= (2.0 - flag_tolerance)) & (df_top_freqs['Frequency'] <= (2.0 + flag_tolerance))
     if not df_top_freqs[mask_2].empty and not any(c.get('Tide_Name') == 'M2' for c in candidates_list):
-        red_flags.append("Peak at ~2.0 cpd detected without M2 candidate (could indicate solar thermal/noise).")
+         # Check if this peak corresponds to S2
+         is_s2_candidate = any(c.get('Tide_Name') == 'S2' and abs(c['Frequency'] - 2.0) <= flag_tolerance for c in candidates_list)
+         if not is_s2_candidate: # Only flag if it's not the S2 candidate itself
+            red_flags.append("Peak at ~2.0 cpd detected without M2 candidate (could indicate solar thermal/noise).")
     return red_flags
 
 def process_shapefile(sf, zone):
@@ -181,10 +225,10 @@ def main():
         
         df_top_freqs = identify_top_dominant_frequencies(filtered_signal, top_n=5)
         
-        # Detect candidates: for DIURNAL, K1 will be matched exactly.
+        # Detect candidates: Only for SEMIDIURNAL_FREQS
         semi_candidates = detect_tidal_candidates_group(df_top_freqs, station, SEMIDIURNAL_FREQS, tolerance=0.001, amplitude_threshold=0.001)
-        diurnal_candidates = detect_tidal_candidates_group(df_top_freqs, station, DIURNAL_FREQS, tolerance=0.001, amplitude_threshold=0.001)
-        tidal_candidates = semi_candidates + diurnal_candidates
+        # diurnal_candidates = detect_tidal_candidates_group(df_top_freqs, station, DIURNAL_FREQS, tolerance=0.001, amplitude_threshold=0.001) # Removed Diurnal detection
+        tidal_candidates = semi_candidates # Only semi-diurnal candidates now
         
         red_flags = red_flag_checks(df_top_freqs, tidal_candidates, station, flag_tolerance=0.001)
         if red_flags:
@@ -211,51 +255,137 @@ def main():
     # === Classify M2 candidates into Sea Tide vs Earth Tide ===
     df_m2 = df_tides[df_tides['Tide_Name'] == 'M2']
     if not df_m2.empty:
-        threshold = df_m2['Amplitude'].mean() * 0.5  # Set threshold to 1.5 times the mean amplitude
+        threshold = df_m2['Amplitude'].mean() * 0.5  # Set threshold to 0.5 times the mean amplitude
         logging.info("Increased threshold for M2 classification: %s", threshold)
+        # Ensure 'Classification' column exists before assigning
+        if 'Classification' not in df_tides.columns:
+             df_tides['Classification'] = pd.NA
         df_tides.loc[df_tides['Tide_Name'] == 'M2', 'Classification'] = np.where(
             df_tides.loc[df_tides['Tide_Name'] == 'M2', 'Amplitude'] > threshold,
             'Sea Tide',
             'Earth Tide'
         )
     
-    # Create a dataframe to show the result M2 Classification
-    df_m2_classif = df_tides[df_tides['Tide_Name'] == 'M2'][['Station', 'TM_X97', 'TM_Y97', 'Frequency', 'Amplitude', 'Classification']]
-    logging.info("M2 Classification results:\n%s", df_m2_classif)
+    # Create a dataframe to show the result M2 Classification for ALL stations
+    df_m2_classif = df_tides[df_tides['Tide_Name'] == 'M2'][['Station', 'TM_X97', 'TM_Y97', 'Frequency', 'Amplitude', 'Classification']].copy()
+    # Sort by Amplitude in descending order
+    df_m2_classif.sort_values(by='Amplitude', ascending=False, inplace=True)
+    # Log all M2 classification results (now sorted)
+    logging.info("M2 Classification results (All Stations, sorted by Amplitude desc):\n%s", df_m2_classif)
     
-    # Write out tidal candidates classification, if desired
-    # df_tides.to_csv('../workspace/df_tides_classif.csv', index=False)
+    # Save the sorted M2 classification results for all stations
+    output_dir = '../workspace/tides_analysis'
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+    m2_classif_filename = os.path.join(output_dir, 'classif_m2_all_stations.csv')
+    df_m2_classif.to_csv(m2_classif_filename, index=False)
+    logging.info(f"M2 classification results saved to {m2_classif_filename}")
+
+    # log df_m2_classif with 'sea tide' classification (Optional: keep if needed for specific sea tide logging)
+    df_m2_sea_tide = df_m2_classif[df_m2_classif['Classification'] == 'Sea Tide']
+    # logging.info("M2 Sea Tide Classification results:\n%s", df_m2_sea_tide) # Keep or remove as needed
+
+    #  save df_m2_sea_tide to csv 
+    #df_m2_sea_tide.to_csv('../workspace/tides_analysis/classif_m2_sea_tide.csv', index=False)
+
+    # === Classify S2 candidates into 'sea tide' vs 'pumping' using amplitude threshold ===
+    df_s2 = df_tides[df_tides['Tide_Name'] == 'S2']
+    if not df_s2.empty:
+        # Compute the threshold from S2 candidates (75th percentile)
+        threshold_s2 = df_s2['Amplitude'].quantile(0.75)
+        logging.info("S2 amplitude threshold (75th percentile): %s", threshold_s2)
+        # Keep only high-amplitude S2 candidates
+        df_s2_high = df_s2[df_s2['Amplitude'] >= threshold_s2].copy()
+        
+        # Create a dictionary for M2 amplitude per station from M2 candidates
+        df_m2 = df_tides[df_tides['Tide_Name'] == 'M2']
+        m2_amp_dict = df_m2.set_index('Station')['Amplitude'].to_dict()
+        
+        # For each high-amplitude S2 candidate, classify using:
+        # if no M2 candidate for the station -> pumping;
+        # if S2 amplitude > M2 amplitude -> pumping; otherwise, sea tide.
+        def classify_s2(row):
+            station = row['Station']
+            s2_amp = row['Amplitude']
+            if station not in m2_amp_dict:
+                return "pumping"
+            elif s2_amp > m2_amp_dict[station]:
+                return "pumping"
+            else:
+                return "sea tide"
+        
+        df_s2_high['Classification'] = df_s2_high.apply(classify_s2, axis=1)
+        
+        # Update main candidate dataframe for S2 candidates (for stations in df_s2_high)
+        for idx, row in df_s2_high.iterrows():
+            station = row['Station']
+            # Ensure 'Classification' column exists before assigning
+            if 'Classification' not in df_tides.columns:
+                 df_tides['Classification'] = pd.NA
+            df_tides.loc[(df_tides['Station'] == station) & (df_tides['Tide_Name'] == 'S2'), 'Classification'] = row['Classification']
     
-    # Plot FFTs for stations with tidal candidates (using 75th percentile amplitude filter for "sea tides")
-    sea_tides = df_tides[df_tides['Amplitude'] >= df_tides['Amplitude'].quantile(0.75)].copy()
-    sea_tides.to_csv('../workspace/tides_analysis/classif_sea_tides.csv', index=False)
-    sea_tides["active"] = 0
-    sea_tides.drop(columns=["Frequency", "Amplitude", "Red_Flag"], inplace=True)
-    sea_tides["freq_type"] = 'DAILY'
+    # Log only the S2 classifications with 'pumping'
+    df_s2_pumping = df_tides[(df_tides['Tide_Name'] == 'S2') & (df_tides['Classification'] == 'pumping')]
+    logging.info("S2 Pumping Classification results:\n%s", 
+                 df_s2_pumping[['Station', 'TM_X97', 'TM_Y97', 'Frequency', 'Amplitude', 'Classification']])
     
-    df_input["active"] = 1
-    df_input.drop(columns=["NAME_C"], inplace=True)
+    # save df_s2_pumping to csv
+    #df_s2_pumping.to_csv('../workspace/tides_analysis/classif_s2_pumping.csv', index=False)
+
+    # === Identify stations classified as both M2 'Sea Tide' and S2 'pumping' ===
+    m2_sea_tide_stations = set(df_tides[(df_tides['Tide_Name'] == 'M2') & (df_tides['Classification'] == 'Sea Tide')]['Station'])
+    s2_pumping_stations = set(df_tides[(df_tides['Tide_Name'] == 'S2') & (df_tides['Classification'] == 'pumping')]['Station'])
     
-    num_stations = len(sea_tides['Station'])
-    num_cols = 2
-    num_rows = (num_stations + num_cols - 1) // num_cols
-    fig, axes = plt.subplots(num_rows, num_cols, figsize=(20, 5 * num_rows), sharex=True, sharey=True)
-    axes = axes.flatten()
+    both_classified_stations = list(m2_sea_tide_stations.intersection(s2_pumping_stations))
     
-    for i, station in enumerate(sea_tides['Station']):
-        signal = df_gw_st[station].values
-        cutoff = 0.5
-        fs = 24
-        filter_order = 5
-        df_top_freqs = identify_top_dominant_frequencies(high_pass_filter(signal, cutoff, fs, filter_order), top_n=5)
-        candidates_station = df_tides[df_tides['Station'] == station].to_dict('records')
-        fft_plot(pd.Series(signal), station, cutoff, fs, filter_order, candidates=candidates_station, ax=axes[i])
-    
-    for j in range(i + 1, len(axes)):
-        fig.delaxes(axes[j])
-    
-    plt.tight_layout()
-    # plt.show()
+    if both_classified_stations:
+        logging.info("Stations classified as M2 'Sea Tide' AND S2 'pumping': %s", sorted(both_classified_stations))
+    else:
+        logging.info("No stations were classified as both M2 'Sea Tide' and S2 'pumping'.")
+
+
+    # === Plot stations classified as 'Sea Tide' ===
+    # Filter df_tides to get stations classified as 'Sea Tide' for M2 or S2
+    sea_tide_stations_to_plot_df = df_tides[df_tides['Classification'] == 'Sea Tide']
+    stations_to_plot = sea_tide_stations_to_plot_df['Station'].unique().tolist()
+
+    if not stations_to_plot:
+        logging.info("No stations classified as 'Sea Tide' to plot.")
+    else:
+        logging.info("Plotting FFT for stations classified as 'Sea Tide': %s", sorted(stations_to_plot))
+        num_stations = len(stations_to_plot)
+        num_cols = 2
+        num_rows = (num_stations + num_cols - 1) // num_cols
+        fig, axes = plt.subplots(num_rows, num_cols, figsize=(20, 5 * num_rows), sharex=True, sharey=True)
+        axes = axes.flatten()
+        
+        plot_index = 0 # Use a separate index for placing plots
+        for station in stations_to_plot:
+            if station in df_gw_st.columns: # Ensure station data exists
+                signal = df_gw_st[station].values
+                cutoff = 0.5
+                fs = 24
+                filter_order = 5
+                # Get candidates specifically for this station
+                candidates_station = df_tides[df_tides['Station'] == station].to_dict('records')
+                fft_plot(pd.Series(signal), station, cutoff, fs, filter_order, candidates=candidates_station, ax=axes[plot_index])
+                plot_index += 1
+            else:
+                 logging.warning(f"Station {station} classified as 'Sea Tide' but not found in df_gw_st columns. Skipping plot.")
+
+        # Remove unused subplots
+        for j in range(plot_index, len(axes)):
+            fig.delaxes(axes[j])
+        
+        plt.tight_layout()
+        # Define the output path and filename for the plot
+        output_dir = '../workspace/tides_analysis'
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+        output_filename = os.path.join(output_dir, 'fft_plots_sea_tide_stations.png')
+        plt.savefig(output_filename, dpi=300) # Save the figure
+        logging.info(f"FFT plots saved to {output_filename}")
+        #plt.show() # Keep commented out or remove
 
 if __name__ == "__main__":
     main()

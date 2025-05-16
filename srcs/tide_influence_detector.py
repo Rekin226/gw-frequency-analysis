@@ -119,21 +119,27 @@ def fft_plot(station_data, station_name, cutoff, fs, order, candidates=None, ax=
         # Position annotations
         if tide_name == 'M2':
             ax.text(actual_freq_peak - 0.05, text_y_coord, f"{tide_name}", 
-                  color='red', fontsize=9, weight='bold', verticalalignment='center', horizontalalignment='right')
+                  color='red', fontsize=12, weight='bold', verticalalignment='center', horizontalalignment='right')
         else:  # S2
             ax.text(actual_freq_peak + 0.05, text_y_coord, f"{tide_name}", 
-                  color='red', fontsize=9, weight='bold', verticalalignment='bottom', horizontalalignment='left')
+                  color='red', fontsize=12, weight='bold', verticalalignment='bottom', horizontalalignment='left')
         
         # Always add a marker at the *true* identified peak (actual_freq_peak, actual_amp_peak_true)
         ax.plot(actual_freq_peak, actual_amp_peak_true, 'ro', markersize=4, alpha=0.7)
 
-    ax.set_title(f'FFT of {station_name}', fontsize=12)
-    ax.set_xlabel('Frequency (cycles per day)', fontsize=10)
-    ax.set_ylabel('Amplitude', fontsize=10)
+    ax.set_title(f'FFT of {station_name}', fontsize=16, weight='bold')
+    ax.set_xlabel('Frequency (cpd)', fontsize=14, weight='bold')
+    ax.set_ylabel('Amplitude', fontsize=14, weight='bold')
     ax.set_xticks([1, 2, 3, 4, 5, 6])
     ax.set_xlim(0, 6)
+    ax.tick_params(axis='both', which='major', labelsize=14) # Increase tick label size
     ax.grid()
-    return ax
+    
+    max_fft_val = 0.0
+    if fft_values.size > 0:
+        max_fft_val = np.max(fft_values)
+        
+    return ax, max_fft_val
 
 def identify_top_dominant_frequencies(signal, top_n=5):
     n = len(signal)
@@ -427,10 +433,12 @@ def main():
         # Set Times New Roman as the default font for the entire figure
         plt.rcParams['font.family'] = 'Times New Roman'
         
-        fig, axes = plt.subplots(num_rows, num_cols, figsize=(20, 5 * num_rows), sharex=True, sharey=True)
+        fig, axes = plt.subplots(num_rows, num_cols, figsize=(20, 5 * num_rows)) # Removed sharex=True, sharey=True
         axes = axes.flatten()
         
         plot_index = 0 # Use a separate index for placing plots
+        overall_max_y_amplitude = 0.0 # Initialize overall max y amplitude
+
         for station in stations_to_plot:
             if station in df_gw_st.columns: # Ensure station data exists
                 signal = df_gw_st[station].values
@@ -449,10 +457,18 @@ def main():
                 
                 # Get candidates specifically for this station
                 candidates_station = df_tides[df_tides['Station'] == station].to_dict('records')
-                fft_plot(pd.Series(signal), station_label, cutoff, fs, filter_order, candidates=candidates_station, ax=axes[plot_index])
+                # fft_plot now returns ax and max_fft_value
+                _, current_max_amplitude = fft_plot(pd.Series(signal), station_label, cutoff, fs, filter_order, candidates=candidates_station, ax=axes[plot_index])
+                # overall_max_y_amplitude = max(overall_max_y_amplitude, current_max_amplitude) # This line is no longer strictly needed for fixed y-axis but can be kept for other purposes or removed.
                 plot_index += 1
             else:
                  logging.warning(f"Station {station} classified as 'Sea Tide' but not found in df_gw_st columns. Skipping plot.")
+
+        # Set the same y-axis limits for all plotted subplots
+        final_y_limit_upper = 0.1 # Fix y-axis max to 0.1
+
+        for i in range(plot_index):
+            axes[i].set_ylim(0, final_y_limit_upper)
 
         # Remove unused subplots
         for j in range(plot_index, len(axes)):

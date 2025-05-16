@@ -247,7 +247,22 @@ def main():
     df_tides['Station'] = df_tides['Station'].astype(str)
     df_input['Station'] = df_input['Station'].astype(str)
     df_tides = df_tides.merge(df_input[['Station', 'NAME_C', 'TM_X97', 'TM_Y97']], on='Station', how='left')
-    df_tides = df_tides[['Station', 'TM_X97', 'TM_Y97', 'Frequency', 'Amplitude', 
+    
+    # Read ST_ID mapping from amt_amp.csv
+    try:
+        df_st_id_map = pd.read_csv('../workspace/tides_analysis/amt_amp.csv')
+        df_st_id_map['GROUNDWATER'] = df_st_id_map['GROUNDWATER'].astype(str).str.lstrip('0')
+        df_st_id_map = df_st_id_map[['GROUNDWATER', 'ST_ID']]
+        df_st_id_map.rename(columns={'GROUNDWATER': 'Station'}, inplace=True)
+        df_tides = df_tides.merge(df_st_id_map, on='Station', how='left')
+        logging.info(f"ST_ID mapping added to {len(df_tides[df_tides['ST_ID'].notna()])} of {len(df_tides)} tide records")
+    except Exception as e:
+        logging.error(f"Error reading ST_ID mapping: {e}")
+        if 'ST_ID' not in df_tides.columns:
+            df_tides['ST_ID'] = pd.NA
+    
+    # Reorder columns to include ST_ID near Station
+    df_tides = df_tides[['ST_ID', 'Station', 'TM_X97', 'TM_Y97', 'Frequency', 'Amplitude', 
                          'Target_Freq', 'Tide_Name', 'Group', 'Red_Flag']]
     
     #logging.info('Tidal candidates after detection: %s', df_tides[df_tides['Tide_Name'] == 'M2'])
@@ -267,7 +282,7 @@ def main():
         )
     
     # Create a dataframe to show the result M2 Classification for ALL stations
-    df_m2_classif = df_tides[df_tides['Tide_Name'] == 'M2'][['Station', 'TM_X97', 'TM_Y97', 'Frequency', 'Amplitude', 'Classification']].copy()
+    df_m2_classif = df_tides[df_tides['Tide_Name'] == 'M2'][['ST_ID', 'Station', 'TM_X97', 'TM_Y97', 'Frequency', 'Amplitude', 'Classification']].copy()
     # Sort by Amplitude in descending order
     df_m2_classif.sort_values(by='Amplitude', ascending=False, inplace=True)
     # Log all M2 classification results (now sorted)
@@ -285,7 +300,7 @@ def main():
     df_m2_sea_tide = df_m2_classif[df_m2_classif['Classification'] == 'Sea Tide']
     # logging.info("M2 Sea Tide Classification results:\n%s", df_m2_sea_tide) # Keep or remove as needed
 
-    #  save df_m2_sea_tide to csv 
+    # Save df_m2_sea_tide to csv (now includes ST_ID)
     #df_m2_sea_tide.to_csv('../workspace/tides_analysis/classif_m2_sea_tide.csv', index=False)
 
     # === Classify S2 candidates into 'sea tide' vs 'pumping' using amplitude threshold ===
@@ -327,21 +342,37 @@ def main():
     # Log only the S2 classifications with 'pumping'
     df_s2_pumping = df_tides[(df_tides['Tide_Name'] == 'S2') & (df_tides['Classification'] == 'pumping')]
     logging.info("S2 Pumping Classification results:\n%s", 
-                 df_s2_pumping[['Station', 'TM_X97', 'TM_Y97', 'Frequency', 'Amplitude', 'Classification']])
+                 df_s2_pumping[['ST_ID', 'Station', 'TM_X97', 'TM_Y97', 'Frequency', 'Amplitude', 'Classification']])
     
-    # save df_s2_pumping to csv
+    # save df_s2_pumping to csv (now includes ST_ID)
     #df_s2_pumping.to_csv('../workspace/tides_analysis/classif_s2_pumping.csv', index=False)
 
     # === Identify stations classified as both M2 'Sea Tide' and S2 'pumping' ===
-    m2_sea_tide_stations = set(df_tides[(df_tides['Tide_Name'] == 'M2') & (df_tides['Classification'] == 'Sea Tide')]['Station'])
-    s2_pumping_stations = set(df_tides[(df_tides['Tide_Name'] == 'S2') & (df_tides['Classification'] == 'pumping')]['Station'])
+    # Create DataFrames with ST_ID for both M2 sea tide and S2 pumping stations
+    df_m2_sea_tide_stations = df_tides[(df_tides['Tide_Name'] == 'M2') & (df_tides['Classification'] == 'Sea Tide')][['ST_ID', 'Station']].copy()
+    df_s2_pumping_stations = df_tides[(df_tides['Tide_Name'] == 'S2') & (df_tides['Classification'] == 'pumping')][['ST_ID', 'Station']].copy()
     
+    # Find intersection first using ST_ID if available
+    if 'ST_ID' in df_tides.columns and df_tides['ST_ID'].notna().any():
+        m2_sea_tide_st_ids = set(df_m2_sea_tide_stations['ST_ID'].dropna())
+        s2_pumping_st_ids = set(df_s2_pumping_stations['ST_ID'].dropna())
+        both_st_ids = m2_sea_tide_st_ids.intersection(s2_pumping_st_ids)
+        
+        if both_st_ids:
+            both_stations_by_st_id = sorted(list(both_st_ids))
+            logging.info(f"Stations (by ST_ID) classified as both M2 'Sea Tide' and S2 'pumping': {both_stations_by_st_id}")
+        else:
+            logging.info("No stations (by ST_ID) were classified as both M2 'Sea Tide' and S2 'pumping'.")
+    
+    # Also perform the original station number-based intersection
+    m2_sea_tide_stations = set(df_m2_sea_tide_stations['Station'])
+    s2_pumping_stations = set(df_s2_pumping_stations['Station'])
     both_classified_stations = list(m2_sea_tide_stations.intersection(s2_pumping_stations))
     
     if both_classified_stations:
-        logging.info("Stations classified as M2 'Sea Tide' AND S2 'pumping': %s", sorted(both_classified_stations))
+        logging.info("Stations (by Station number) classified as M2 'Sea Tide' AND S2 'pumping': %s", sorted(both_classified_stations))
     else:
-        logging.info("No stations were classified as both M2 'Sea Tide' and S2 'pumping'.")
+        logging.info("No stations (by Station number) were classified as both M2 'Sea Tide' and S2 'pumping'.")
 
 
     # === Plot stations classified as 'Sea Tide' ===
@@ -382,7 +413,7 @@ def main():
         output_dir = '../workspace/tides_analysis'
         if not os.path.exists(output_dir):
             os.makedirs(output_dir)
-        output_filename = os.path.join(output_dir, 'fft_plots_sea_tide_stations.png')
+        output_filename = os.path.join(output_dir, 'fft_plots_sea_tide_stations.tiff')
         plt.savefig(output_filename, dpi=300) # Save the figure
         logging.info(f"FFT plots saved to {output_filename}")
         #plt.show() # Keep commented out or remove

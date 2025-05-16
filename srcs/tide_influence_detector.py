@@ -40,62 +40,92 @@ def fft_plot(station_data, station_name, cutoff, fs, order, candidates=None, ax=
     filtered_data = high_pass_filter(station_data_array, cutoff, fs, order)
     n = len(filtered_data)
     T = 1.0  # Sampling interval in hours
-    fft_values = fft(filtered_data)
-    fft_values = 2.0/n * np.abs(fft_values[:n//2])
-    freq = fftfreq(n, T)[:n//2] * 24  # Convert to cycles per day
+    
+    if n < 2: # Not enough data for FFT
+        fft_values = np.array([])
+        freq = np.array([])
+    else:
+        fft_calc = fft(filtered_data)
+        fft_values = 2.0/n * np.abs(fft_calc[:n//2])
+        freq = fftfreq(n, T)[:n//2] * 24  # Convert to cycles per day
     
     if ax is None:
         plt.figure()
         ax = plt.gca()
     ax.plot(freq, fft_values, label='FFT amplitude')
     
-    # Explicitly annotate M2 and S2 if peaks are found near their target frequencies
+    # Explicitly annotate M2 and S2
     target_tides_to_annotate = {
         'M2': 1.9323,
         'S2': 2.0000
     }
     
-    # Find max amplitude in the relevant frequency range for positioning text
-    freq_mask_plot = (freq > 0.5) & (freq < 6)
-    y_max_plot = np.max(fft_values[freq_mask_plot]) if np.any(freq_mask_plot) else np.max(fft_values)
-    # Determine y-position for vertical frequency labels (e.g., halfway up the plot)
-    y_min_plot, current_y_max = ax.get_ylim() # Get current y-limits
-    # Ensure y_max_plot is used if it's higher than current_y_max (in case ylim is not auto-updated yet)
-    effective_y_max = max(y_max_plot, current_y_max) 
+    # Calculate y_max_plot_data based on fft_values for scaling annotations
+    y_max_plot_data = 0.0 
+    if len(fft_values) > 0:
+        # Define the typical frequency range visible in plots
+        freq_mask_plot_range = (freq > 0.5) & (freq < 6)
+        
+        # Check if any frequencies fall within the desired plot range
+        if np.any(freq_mask_plot_range):
+            selected_values = fft_values[freq_mask_plot_range]
+            if len(selected_values) > 0: # Ensure sub-array is not empty
+                y_max_plot_data = np.max(selected_values)
+            elif np.any(fft_values): # Check if fft_values itself is not all zeros or empty
+                y_max_plot_data = np.max(fft_values)
+        elif np.any(fft_values): # No frequencies in the 0.5-6 range, use max of all fft_values if any exist
+            y_max_plot_data = np.max(fft_values)
 
-    # Dramatically reduced threshold to ensure all peaks are detected
-    min_amp_threshold = effective_y_max * 0.01  # Reduced even further to 1% of max amplitude
-    
-    # Use much wider tolerance for peak finding
-    tolerance = 0.1  # Increased even more to ensure detection
-    
-    # Create locations for both peaks even if they don't exist naturally
+    # Determine effective_y_max for scaling annotations, considering current plot limits
+    y_min_curr, y_max_curr_plot_limit = ax.get_ylim() 
+    effective_y_max = max(y_max_plot_data, y_max_curr_plot_limit)
+
+    # Annotation loop
     for tide_name, target_freq in target_tides_to_annotate.items():
-        # Always add both M2 and S2 labels regardless of detection
-        # Find the index of the frequency in the FFT results closest to the target frequency
-        freq_diff = np.abs(freq - target_freq)
-        closest_idx = np.argmin(freq_diff)
+        actual_freq_peak = target_freq  # Default if no peak found or freq array is empty
+        actual_amp_peak_true = 0.0      # Default if no peak found
+
+        if len(freq) > 0 and len(fft_values) > 0: # Proceed only if freq and fft_values arrays are populated
+            # Define a search window around the target frequency to find the actual peak
+            search_tolerance = 0.05  # cpd; window to search for the peak
+            
+            indices_in_window = np.where((freq >= target_freq - search_tolerance) & (freq <= target_freq + search_tolerance))[0]
+            
+            if len(indices_in_window) > 0:
+                # Find the index of the maximum amplitude *within this window*
+                local_peak_idx_in_window = np.argmax(fft_values[indices_in_window])
+                # Convert this back to an index in the original 'freq' and 'fft_values' arrays
+                peak_idx_global = indices_in_window[local_peak_idx_in_window]
+                
+                actual_freq_peak = freq[peak_idx_global]
+                actual_amp_peak_true = fft_values[peak_idx_global] # True amplitude of the peak
+            else:
+                # Fallback: if no FFT points in the narrow window, use the FFT value at the point closest to target_freq.
+                closest_idx_to_target = np.argmin(np.abs(freq - target_freq))
+                actual_freq_peak = freq[closest_idx_to_target]
+                actual_amp_peak_true = fft_values[closest_idx_to_target]
         
-        # Get the actual peak frequency and amplitude
-        actual_freq_peak = freq[closest_idx]
-        actual_amp_peak = fft_values[closest_idx]
+        # Determine a reference amplitude for text positioning.
+        # If the true peak is very small, lift the text's reference y-position for visibility.
+        reference_amp_for_text = actual_amp_peak_true
+        if effective_y_max > 1e-9: # Avoid division by zero or issues with tiny effective_y_max
+            min_visible_amp_level = effective_y_max * 0.05
+            if reference_amp_for_text < min_visible_amp_level:
+                reference_amp_for_text = min_visible_amp_level
         
-        # If amplitude is too small to see, artificially boost it for visualization
-        if actual_amp_peak < (effective_y_max * 0.05):
-            actual_amp_peak = effective_y_max * 0.05  # Set to at least 5% of max for visibility
+        # Y-coordinate for the text label, slightly above the reference amplitude
+        text_y_coord = reference_amp_for_text * 1.05
         
-        # Position annotations differently for M2 and S2
+        # Position annotations
         if tide_name == 'M2':
-            # Place M2 to the left of the red peak
-            ax.text(actual_freq_peak - 0.15, actual_amp_peak, f"{tide_name}", 
+            ax.text(actual_freq_peak - 0.05, text_y_coord, f"{tide_name}", 
                   color='red', fontsize=9, weight='bold', verticalalignment='center', horizontalalignment='right')
         else:  # S2
-            # Place S2 to the top right of the red peak
-            ax.text(actual_freq_peak + 0.05, actual_amp_peak * 1.1, f"{tide_name}", 
+            ax.text(actual_freq_peak + 0.05, text_y_coord, f"{tide_name}", 
                   color='red', fontsize=9, weight='bold', verticalalignment='bottom', horizontalalignment='left')
         
-        # Always add a marker at the peak
-        ax.plot(actual_freq_peak, actual_amp_peak, 'ro', markersize=4, alpha=0.7)
+        # Always add a marker at the *true* identified peak (actual_freq_peak, actual_amp_peak_true)
+        ax.plot(actual_freq_peak, actual_amp_peak_true, 'ro', markersize=4, alpha=0.7)
 
     ax.set_title(f'FFT of {station_name}', fontsize=12)
     ax.set_xlabel('Frequency (cycles per day)', fontsize=10)

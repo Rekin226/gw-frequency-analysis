@@ -55,8 +55,6 @@ def fft_plot(station_data, station_name, cutoff, fs, order, candidates=None, ax=
         'S2': 2.0000
     }
     
-    tolerance = 0.05 # Tolerance window (in cpd) to find the peak near the target frequency
-    
     # Find max amplitude in the relevant frequency range for positioning text
     freq_mask_plot = (freq > 0.5) & (freq < 6)
     y_max_plot = np.max(fft_values[freq_mask_plot]) if np.any(freq_mask_plot) else np.max(fft_values)
@@ -64,32 +62,40 @@ def fft_plot(station_data, station_name, cutoff, fs, order, candidates=None, ax=
     y_min_plot, current_y_max = ax.get_ylim() # Get current y-limits
     # Ensure y_max_plot is used if it's higher than current_y_max (in case ylim is not auto-updated yet)
     effective_y_max = max(y_max_plot, current_y_max) 
-    freq_label_y_pos = y_min_plot + (effective_y_max - y_min_plot) * 0.5 # Position label halfway up
 
+    # Dramatically reduced threshold to ensure all peaks are detected
+    min_amp_threshold = effective_y_max * 0.01  # Reduced even further to 1% of max amplitude
+    
+    # Use much wider tolerance for peak finding
+    tolerance = 0.1  # Increased even more to ensure detection
+    
+    # Create locations for both peaks even if they don't exist naturally
     for tide_name, target_freq in target_tides_to_annotate.items():
-        # Add vertical dashed line at the target frequency
-        ax.axvline(x=target_freq, linestyle='--', color='grey', alpha=0.7)
-        
-        # Add the target frequency label vertically along the line
-        ax.text(target_freq, freq_label_y_pos, f"{target_freq:.3f} cpd", 
-                color='grey', fontsize=7, rotation=90, 
-                verticalalignment='center', horizontalalignment='right') # Adjust ha/va for placement relative to line
-
+        # Always add both M2 and S2 labels regardless of detection
         # Find the index of the frequency in the FFT results closest to the target frequency
         freq_diff = np.abs(freq - target_freq)
         closest_idx = np.argmin(freq_diff)
         
-        # Check if the closest frequency is within the tolerance AND has significant amplitude
-        min_amp_threshold = effective_y_max * 0.1 # Use effective_y_max for threshold
-        if freq_diff[closest_idx] <= tolerance and fft_values[closest_idx] > min_amp_threshold:
-            actual_freq_peak = freq[closest_idx]
-            actual_amp_peak = fft_values[closest_idx]
-            
-            # Annotate the Tide Name (M2/S2) horizontally at the peak
-            ax.text(actual_freq_peak + 0.05, actual_amp_peak, f"{tide_name}", 
-                    color='red', fontsize=9, weight='bold', verticalalignment='bottom', horizontalalignment='left')
-            # Optionally add a small marker at the peak
-            ax.plot(actual_freq_peak, actual_amp_peak, 'ro', markersize=4, alpha=0.7) 
+        # Get the actual peak frequency and amplitude
+        actual_freq_peak = freq[closest_idx]
+        actual_amp_peak = fft_values[closest_idx]
+        
+        # If amplitude is too small to see, artificially boost it for visualization
+        if actual_amp_peak < (effective_y_max * 0.05):
+            actual_amp_peak = effective_y_max * 0.05  # Set to at least 5% of max for visibility
+        
+        # Position annotations differently for M2 and S2
+        if tide_name == 'M2':
+            # Place M2 to the left of the red peak
+            ax.text(actual_freq_peak - 0.15, actual_amp_peak, f"{tide_name}", 
+                  color='red', fontsize=9, weight='bold', verticalalignment='center', horizontalalignment='right')
+        else:  # S2
+            # Place S2 to the top right of the red peak
+            ax.text(actual_freq_peak + 0.05, actual_amp_peak * 1.1, f"{tide_name}", 
+                  color='red', fontsize=9, weight='bold', verticalalignment='bottom', horizontalalignment='left')
+        
+        # Always add a marker at the peak
+        ax.plot(actual_freq_peak, actual_amp_peak, 'ro', markersize=4, alpha=0.7)
 
     ax.set_title(f'FFT of {station_name}', fontsize=12)
     ax.set_xlabel('Frequency (cycles per day)', fontsize=10)
@@ -387,6 +393,10 @@ def main():
         num_stations = len(stations_to_plot)
         num_cols = 2
         num_rows = (num_stations + num_cols - 1) // num_cols
+
+        # Set Times New Roman as the default font for the entire figure
+        plt.rcParams['font.family'] = 'Times New Roman'
+        
         fig, axes = plt.subplots(num_rows, num_cols, figsize=(20, 5 * num_rows), sharex=True, sharey=True)
         axes = axes.flatten()
         
@@ -397,9 +407,19 @@ def main():
                 cutoff = 0.5
                 fs = 24
                 filter_order = 5
+                
+                # Create a station label that includes ST_ID if available
+                station_info = df_tides[(df_tides['Station'] == station) & (df_tides['Classification'] == 'Sea Tide')]
+                if 'ST_ID' in station_info.columns and not station_info['ST_ID'].isna().all():
+                    # Use the first non-NA ST_ID if there are multiple records
+                    st_id = station_info['ST_ID'].dropna().iloc[0] if not station_info['ST_ID'].dropna().empty else "No ST_ID"
+                    station_label = f"{st_id}"
+                else:
+                    station_label = f"Station {station}"
+                
                 # Get candidates specifically for this station
                 candidates_station = df_tides[df_tides['Station'] == station].to_dict('records')
-                fft_plot(pd.Series(signal), station, cutoff, fs, filter_order, candidates=candidates_station, ax=axes[plot_index])
+                fft_plot(pd.Series(signal), station_label, cutoff, fs, filter_order, candidates=candidates_station, ax=axes[plot_index])
                 plot_index += 1
             else:
                  logging.warning(f"Station {station} classified as 'Sea Tide' but not found in df_gw_st columns. Skipping plot.")

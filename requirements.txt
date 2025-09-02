@@ -1,0 +1,11 @@
+pandas
+numpy
+scipy
+scikit-learn
+python-dateutil
+matplotlib
+pickle-mixin
+pyshp
+pyproj
+geopandas
+py-cpuinfo

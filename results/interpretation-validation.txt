@@ -1,0 +1,23 @@
+Overall, these validation results look strong and consistent with a robust method. Here’s how to read them and whether they meet reasonable success criteria.
+
+Negative controls (off-target frequencies)
+
+False positives: high_rate is 0.0 at all control frequencies (0.37, 1.37, 2.73, 3.41 cpd). That’s excellent and indicates the pipeline is not spuriously flagging off-target periodicities as “high.”
+Medium labels: med_rate is modest (10.6% at 0.37 cpd; 1.5% at 1.37 cpd; 0% at 2.73 and 3.41). Some “medium” at 0.37 cpd likely reflects background red-noise/low-frequency variability or weak multi-day cycles; still acceptable since highs are zero.
+Amplitude scale: control medians are an order of magnitude below typical target thresholds (median_amp ~1e-3 or less), consistent with low false detections.
+Verdict: passes the negative-control check. For a paper, report the near-zero high false-positive rate and small medium rates, especially noting n=66 per control frequency.
+Cross-method agreement (Welch vs FFT)
+
+Amplitude correlations: Spearman ρ = 0.942 (1 cpd) and 0.809 (2 cpd), both with extremely small p-values. This is strong cross-method consistency on rank ordering of amplitudes.
+Category agreement: κ = 0.638 (1 cpd) and 0.699 (2 cpd), which is “substantial” agreement by common interpretation (0.61–0.80). This supports that categorization is not method-dependent.
+Scale factors: 0.0706 (1 cpd) and 0.0432 (2 cpd) reflect expected unit differences between PSD-based (Welch) proxies and FFT amplitudes; alignment via a robust median ratio is appropriate.
+Verdict: passes method-agreement expectations (ρ ≥ 0.7, κ ≥ 0.6).
+Threshold cross-validation (station-wise K-fold)
+
+Stability: κ per fold is 1.0 for 3/5 folds and ~0.86–0.87 for the others; percent category switches averages ~1.5% (only one fold shows ~7.7% switches). This indicates highly stable categories under re-derived thresholds.
+Threshold variability: low_thr varies ~10% across folds; high_thr varies ~13%—both modest, suggesting thresholds generalize well across stations.
+Verdict: strong generalization of the shared thresholds; limited sensitivity to which wells are used to compute them.
+Bottom line
+
+The pipeline shows minimal false positives at off-target frequencies, substantial cross-method agreement, and highly stable thresholding under cross-validation. This is good evidence that the results are reliable and suitable for publication.
+Suggested additions (optional for completeness): report target vs control amplitude distributions (medians/IQRs) side-by-side, provide confidence intervals for κ via bootstrapping, and include a brief sensitivity note (e.g., results unchanged under alternative resampling or windowing).

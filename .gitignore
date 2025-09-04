@@ -1,7 +1,2 @@
 data
-/*
- * This is a directory for storing data files
- */
-
- .venv/
- 
+.venv/

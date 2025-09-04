@@ -9,3 +9,4 @@ pyshp
 pyproj
 geopandas
 py-cpuinfo
+numba

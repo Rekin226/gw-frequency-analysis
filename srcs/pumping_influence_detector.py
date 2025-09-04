@@ -549,6 +549,21 @@ def main():
 
     summary = summary.merge(df_input[['Station', 'NAME_C', 'TM_X97', 'TM_Y97']], on='Station', how='left')
 
+    # Remove specific stations from the Pumping amplitude summary
+    stations_to_drop = {'7050111', '7010111', '7100211', '9090111'}
+    present_to_drop = sorted(stations_to_drop.intersection(set(summary['Station'].astype(str))))
+    if present_to_drop:
+        print("\nRemoving stations from Pumping amplitude summary:")
+        for st in present_to_drop:
+            print(f"  - {st}")
+        summary = summary[~summary['Station'].astype(str).isin(stations_to_drop)].copy()
+    else:
+        print("\nNo specified stations to remove from Pumping amplitude summary.")
+
+    # Add sequential station ids (w1, w2, ...) to the summary
+    summary = summary.reset_index(drop=True)
+    summary['station id'] = [f"w{i}" for i in range(1, len(summary) + 1)]
+
     out_path = '../results'
     os.makedirs(out_path, exist_ok=True)
     out_file = os.path.join(out_path, 'pumping_amplitude_summary.csv')

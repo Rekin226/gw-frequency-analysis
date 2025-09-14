@@ -15,6 +15,14 @@ import os
 import json
 from scipy.signal import welch
 from scipy.stats import spearmanr
+from matplotlib.path import Path as MplPath
+from matplotlib.colors import LogNorm, PowerNorm, Normalize
+from matplotlib.colors import BoundaryNorm
+import matplotlib.patches as mpatches
+import geopandas as gpd
+from scipy.interpolate import Rbf
+from pyproj import CRS, Transformer
+from matplotlib.patches import PathPatch
 
 logging.basicConfig(level=logging.INFO)
 
@@ -158,23 +166,115 @@ def plot_amplitude_scatter(summary: pd.DataFrame, low_thr: float, high_thr: floa
     ax.grid(True, alpha=0.3)
     _savefig(fig, os.path.join(out_dir, 'amplitude_scatter.png'))
 
-def plot_spatial(summary: pd.DataFrame, target: str, out_dir: str):
-    # Simple XY scatter in TM coordinates
-    df = summary.dropna(subset=['TM_X97', 'TM_Y97', f'category_{target}']).copy()
-    color_map = {'low': '#1f77b4', 'medium': '#ff7f0e', 'high': '#d62728'}
-    df['color'] = df[f'category_{target}'].map(color_map)
+def plot_spatial_interpolation(summary: pd.DataFrame, out_dir: str,
+                               boundary_shp: str = '../data/gis/choushi_edit.shp',
+                               grid_size: int = 200):
+    """
+    Interpolates 1cpd and 2cpd amplitudes using RBF and plots them in two subplots,
+    with station locations and labels. Properly clips interpolation to boundary.
+    """
+    # Define CRS and transformer
+    twd97_crs = CRS.from_string("+proj=tmerc +lat_0=0 +lon_0=121 +k=0.9999 +x_0=250000 +y_0=0 +ellps=GRS80 +units=m +no_defs")
+    wgs84_crs = CRS.from_string("+proj=longlat +datum=WGS84 +no_defs")
+    transformer_to_wgs84 = Transformer.from_crs(twd97_crs, wgs84_crs, always_xy=True)
 
-    fig, ax = plt.subplots(figsize=(6, 6))
-    ax.scatter(df['TM_X97'], df['TM_Y97'], c=df['color'], s=15, alpha=0.9, edgecolor='k', linewidths=0.2)
-    ax.set_xlabel('TM_X97')
-    ax.set_ylabel('TM_Y97')
-    ax.set_aspect('equal', adjustable='box')
-    ax.set_title(f'Well categories (TM) — {target}')
-    # Legend
-    for label, color in color_map.items():
-        ax.scatter([], [], c=color, label=label.capitalize(), s=30)
-    ax.legend(title='Category', loc='best', frameon=True)
-    _savefig(fig, os.path.join(out_dir, f'spatial_{target}.png'))
+    # Read boundary shapefile
+    try:
+        boundary_gdf = gpd.read_file(boundary_shp)
+        if boundary_gdf.crs.to_epsg() != 4326:
+            boundary_gdf = boundary_gdf.to_crs(epsg=4326)
+        xmin, ymin, xmax, ymax = boundary_gdf.total_bounds
+        
+        # Create a unified boundary geometry for masking
+        from shapely.ops import unary_union
+        boundary_union = unary_union(boundary_gdf.geometry)
+        
+    except Exception as e:
+        logging.error("Failed to read boundary shapefile '%s': %s", boundary_shp, e)
+        return
+
+    # Prepare station data from summary, converting coordinates to WGS84
+    df = summary.dropna(subset=['TM_X97', 'TM_Y97', 'station id']).copy()
+    x_tm, y_tm = df['TM_X97'].values, df['TM_Y97'].values
+    x_wgs, y_wgs = transformer_to_wgs84.transform(x_tm, y_tm)
+    df['lon'] = x_wgs
+    df['lat'] = y_wgs
+
+    # Create figure with two subplots
+    fig, axes = plt.subplots(1, 2, figsize=(18, 8), constrained_layout=True)
+    fig.suptitle('Spatial Interpolation of Pumping Amplitudes')
+
+    data_to_plot = {'1cpd': 'amplitude_1cpd', '2cpd': 'amplitude_2cpd'}
+    titles = {'1cpd': '1 cpd Amplitude', '2cpd': '2 cpd Amplitude'}
+
+    # Generate interpolation grid
+    xi = np.linspace(xmin, xmax, grid_size)
+    yi = np.linspace(ymin, ymax, grid_size)
+    Xi, Yi = np.meshgrid(xi, yi)
+
+    for ax, (key, col) in zip(axes, data_to_plot.items()):
+        sub_df = df.dropna(subset=[col])
+        if sub_df.empty:
+            logging.warning(f"No data available for {key} to plot interpolation.")
+            ax.set_title(titles[key] + " (No data)")
+            boundary_gdf.plot(ax=ax, facecolor='none', edgecolor='black')
+            continue
+
+        x_coords = sub_df['lon'].values
+        y_coords = sub_df['lat'].values
+        z_values = sub_df[col].values
+
+        # RBF interpolation
+        rbfi = Rbf(x_coords, y_coords, z_values, function='inverse')
+        Zi = rbfi(Xi, Yi)
+
+        # Mask interpolation outside boundary
+        try:
+            from shapely.geometry import Point
+            # Create mask for points outside boundary
+            mask = np.zeros_like(Zi, dtype=bool)
+            for i in range(Xi.shape[0]):
+                for j in range(Xi.shape[1]):
+                    point = Point(Xi[i, j], Yi[i, j])
+                    if not boundary_union.contains(point):
+                        mask[i, j] = True
+            
+            # Apply mask to interpolated data
+            Zi_masked = np.ma.masked_array(Zi, mask=mask)
+            
+        except Exception as e:
+            logging.warning(f"Could not apply boundary mask for {key}: {e}")
+            Zi_masked = Zi
+
+        # Plot contour with masked data
+        try:
+            contour = ax.contourf(Xi, Yi, Zi_masked, levels=20, cmap='coolwarm', alpha=0.7, extend='both')
+            cbar = fig.colorbar(contour, ax=ax, label='Amplitude')
+        except Exception as e:
+            logging.warning(f"Contour plot failed for {key}: {e}")
+            # Fallback to regular contour without masking
+            contour = ax.contourf(Xi, Yi, Zi, levels=20, cmap='coolwarm', alpha=0.7)
+            cbar = fig.colorbar(contour, ax=ax, label='Amplitude')
+
+        # Plot boundary
+        boundary_gdf.plot(ax=ax, facecolor='none', edgecolor='black', linewidth=1.5)
+
+        # Plot station points and labels
+        ax.scatter(x_coords, y_coords, c='black', marker='.', s=50, label='Stations', zorder=5)
+        for i, station_id in enumerate(sub_df['station id']):
+            ax.annotate(station_id, (x_coords[i], y_coords[i]), fontsize=7, 
+                       xytext=(2, 2), textcoords='offset points', zorder=6)
+
+        ax.set_title(titles[key])
+        ax.set_xlabel('Longitude')
+        ax.ticklabel_format(useOffset=False, style='plain')
+        ax.set_xlim(xmin, xmax)
+        ax.set_ylim(ymin, ymax)
+        ax.grid(True, alpha=0.3)
+
+    axes[0].set_ylabel('Latitude')
+    _savefig(fig, os.path.join(out_dir, 'spatial_interpolation.png'))
+
 
 def plot_amplitude_hist(summary: pd.DataFrame, out_dir: str):
     fig, axes = plt.subplots(1, 2, figsize=(10, 4), sharey=True)
@@ -228,8 +328,9 @@ def generate_figures(summary: pd.DataFrame, df_gw_st: pd.DataFrame, stations_lis
     out_dir = '../results/figures'
     plot_category_counts(summary, out_dir)
     plot_amplitude_scatter(summary, low_thr, high_thr, out_dir)
-    plot_spatial(summary, '1cpd', out_dir)
-    plot_spatial(summary, '2cpd', out_dir)
+
+    plot_spatial_interpolation(summary, out_dir)
+
     plot_amplitude_hist(summary, out_dir)
     plot_sample_periodogram(df_gw_st, stations_list, freq_minutes, dt_hours, out_dir)
 

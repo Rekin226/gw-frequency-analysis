@@ -120,9 +120,14 @@ def categorize_with_thresholds(amplitudes: pd.Series, low_thr: float, high_thr: 
         return 'high'
     return amplitudes.map(label)
 
-def _savefig(fig, out_path):
-    os.makedirs(os.path.dirname(out_path), exist_ok=True)
-    fig.savefig(out_path, dpi=300, bbox_inches='tight')
+def _savefig(fig, out_path, dpi=300):
+    """
+    Save figure as TIFF (overrides provided extension), 300 dpi by default.
+    """
+    root, _ = os.path.splitext(out_path)
+    tif_path = root + '.tif'
+    os.makedirs(os.path.dirname(tif_path), exist_ok=True)
+    fig.savefig(tif_path, dpi=dpi, bbox_inches='tight')
     plt.close(fig)
 
 def plot_category_counts(summary: pd.DataFrame, out_dir: str):
@@ -141,7 +146,7 @@ def plot_category_counts(summary: pd.DataFrame, out_dir: str):
     ax.set_ylabel('Count')
     ax.set_title('Category counts by target')
     ax.legend()
-    _savefig(fig, os.path.join(out_dir, 'category_counts.png'))
+    _savefig(fig, os.path.join(out_dir, 'category_counts.tif'))
 
 def plot_amplitude_scatter(summary: pd.DataFrame, low_thr: float, high_thr: float, out_dir: str):
     # Combined category for color (use 1cpd by default)
@@ -149,22 +154,58 @@ def plot_amplitude_scatter(summary: pd.DataFrame, low_thr: float, high_thr: floa
     color_map = {'low': '#1f77b4', 'medium': '#ff7f0e', 'high': '#d62728'}
     colors = cat.map(color_map)
 
+    x_raw = summary['amplitude_1cpd'].astype(float)
+    y_raw = summary['amplitude_2cpd'].astype(float)
+
+    # Prepare data for log scale: replace non-positive with a small proxy
+    pos = pd.concat([x_raw, y_raw])
+    pos = pos[(pos > 0) & np.isfinite(pos)]
+    if not pos.empty:
+        min_pos = pos.min()
+        tiny = min_pos / 10.0
+        x = x_raw.where(x_raw > 0, tiny)
+        y = y_raw.where(y_raw > 0, tiny)
+        use_log = True
+    else:
+        # Fallback: no positive values -> keep originals and linear scale
+        x, y = x_raw, y_raw
+        use_log = False
+
     fig, ax = plt.subplots(figsize=(5, 5))
-    x = summary['amplitude_1cpd']
-    y = summary['amplitude_2cpd']
     ax.scatter(x, y, c=colors, s=30, edgecolor='k', linewidths=0.3, alpha=0.8)
+
+    # Legend box for categories
+    handles = [
+        plt.Line2D([0], [0], marker='o', color='none',
+                   markerfacecolor=color_map[k], markeredgecolor='k',
+                   markersize=7, linewidth=0, label=k.capitalize())
+        for k in ['low', 'medium', 'high']
+    ]
+    ax.legend(handles=handles,
+              loc='upper left', frameon=True, framealpha=0.9,
+              fancybox=True, edgecolor='black')
+
     ax.set_xlabel('Amplitude at 1 cpd')
     ax.set_ylabel('Amplitude at 2 cpd')
-    ax.set_title('Amplitude relationship: 1 cpd vs 2 cpd')
-    # Draw shared thresholds
-    if np.isfinite(low_thr):
+    #title_suffix = ' (log scale)' if use_log else ''
+    ax.set_title(f'Amplitude relationship: 1 cpd vs 2 cpd')
+
+    # Draw shared thresholds (still meaningful on log scale)
+    if np.isfinite(low_thr) and low_thr > 0:
         ax.axvline(low_thr, color='gray', linestyle='--', linewidth=1)
         ax.axhline(low_thr, color='gray', linestyle='--', linewidth=1)
-    if np.isfinite(high_thr):
+    if np.isfinite(high_thr) and high_thr > 0:
         ax.axvline(high_thr, color='gray', linestyle='--', linewidth=1)
         ax.axhline(high_thr, color='gray', linestyle='--', linewidth=1)
-    ax.grid(True, alpha=0.3)
-    _savefig(fig, os.path.join(out_dir, 'amplitude_scatter.png'))
+
+    if use_log:
+        ax.set_xscale('log')
+        ax.set_yscale('log')
+        ax.grid(True, which='both', alpha=0.25, linewidth=0.5)
+    else:
+        ax.grid(True, alpha=0.3)
+
+    _savefig(fig, os.path.join(out_dir, 'amplitude_scatter.tif'))
 
 def plot_spatial_interpolation(summary: pd.DataFrame, out_dir: str,
                                boundary_shp: str = '../data/gis/choushi_edit.shp',
@@ -200,8 +241,9 @@ def plot_spatial_interpolation(summary: pd.DataFrame, out_dir: str,
     df['lon'] = x_wgs
     df['lat'] = y_wgs
 
-    # Create figure with two subplots
-    fig, axes = plt.subplots(1, 2, figsize=(18, 8), constrained_layout=True)
+    # Create figure with two subplots (manual spacing control)
+    fig, axes = plt.subplots(1, 2, figsize=(18, 8))  # removed constrained_layout for custom spacing
+    fig.subplots_adjust(wspace=0.01)  # reduced gap between subplots
     fig.suptitle('Spatial Interpolation of Pumping Amplitudes')
 
     data_to_plot = {'1cpd': 'amplitude_1cpd', '2cpd': 'amplitude_2cpd'}
@@ -249,12 +291,17 @@ def plot_spatial_interpolation(summary: pd.DataFrame, out_dir: str,
         # Plot contour with masked data
         try:
             contour = ax.contourf(Xi, Yi, Zi_masked, levels=20, cmap='coolwarm', alpha=0.7, extend='both')
-            cbar = fig.colorbar(contour, ax=ax, label='Amplitude')
+            cbar = fig.colorbar(contour, ax=ax, pad=0.01, fraction=0.035,
+                                extend='both', extendrect=True)
+            cbar.set_label('Amplitude', rotation=270, labelpad=12)
+            cbar.ax.yaxis.set_label_position('right')
         except Exception as e:
             logging.warning(f"Contour plot failed for {key}: {e}")
-            # Fallback to regular contour without masking
-            contour = ax.contourf(Xi, Yi, Zi, levels=20, cmap='coolwarm', alpha=0.7)
-            cbar = fig.colorbar(contour, ax=ax, label='Amplitude')
+            contour = ax.contourf(Xi, Yi, Zi, levels=20, cmap='coolwarm', alpha=0.7, extend='both')
+            cbar = fig.colorbar(contour, ax=ax, pad=0.01, fraction=0.035,
+                                extend='both', extendrect=True)
+            cbar.set_label('Amplitude', rotation=270, labelpad=12)
+            cbar.ax.yaxis.set_label_position('right')
 
         # Plot boundary
         boundary_gdf.plot(ax=ax, facecolor='none', edgecolor='black', linewidth=1.5)
@@ -273,7 +320,7 @@ def plot_spatial_interpolation(summary: pd.DataFrame, out_dir: str,
         ax.grid(True, alpha=0.3)
 
     axes[0].set_ylabel('Latitude')
-    _savefig(fig, os.path.join(out_dir, 'spatial_interpolation.png'))
+    _savefig(fig, os.path.join(out_dir, 'spatial_interpolation.tif'))
 
 
 def plot_amplitude_hist(summary: pd.DataFrame, out_dir: str):
@@ -281,12 +328,15 @@ def plot_amplitude_hist(summary: pd.DataFrame, out_dir: str):
     bins = 20
     for ax, target in zip(axes, ['1cpd', '2cpd']):
         vals = summary[f'amplitude_{target}'].dropna().values
-        ax.hist(vals, bins=bins, color='#4c78a8', alpha=0.8)
+        # Draw grid first (behind) with low z-order
+        ax.grid(True, alpha=0.3, zorder=0)
+        # Histogram bars with higher z-order so they appear on top of grid
+        ax.hist(vals, bins=bins, color='#4c78a8', alpha=1,
+                edgecolor='black', linewidth=0.5, zorder=2)
         ax.set_title(f'Amplitude distribution — {target}')
         ax.set_xlabel('Amplitude')
-        ax.grid(True, alpha=0.3)
     axes[0].set_ylabel('Count')
-    _savefig(fig, os.path.join(out_dir, 'amplitude_histograms.png'))
+    _savefig(fig, os.path.join(out_dir, 'amplitude_histograms.tif'))
 
 def plot_sample_periodogram(df_gw_st: pd.DataFrame, stations_list: list, freq_minutes: int, dt_hours: float, out_dir: str):
     # Pick a representative station with >= 12 numeric samples
@@ -322,7 +372,7 @@ def plot_sample_periodogram(df_gw_st: pd.DataFrame, stations_list: list, freq_mi
         ax.axvline(f0, color=col, linestyle='--', linewidth=1.2, label=f'{f0:.0f} cpd')
     ax.legend()
     ax.grid(True, alpha=0.3)
-    _savefig(fig, os.path.join(out_dir, f'periodogram_{sample}.png'))
+    _savefig(fig, os.path.join(out_dir, f'periodogram_{sample}.tif'))
 
 def generate_figures(summary: pd.DataFrame, df_gw_st: pd.DataFrame, stations_list: list, low_thr: float, high_thr: float, freq_minutes: int, dt_hours: float):
     out_dir = '../results/figures'

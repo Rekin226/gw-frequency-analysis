@@ -1,2 +1,5 @@
 data
 .venv/
+# workspace files
+workspace
+results

@@ -14,7 +14,7 @@ import sys
 import os
 import json
 from scipy.signal import welch
-from scipy.stats import spearmanr
+from scipy.stats import spearmanr, gaussian_kde
 from matplotlib.path import Path as MplPath
 from matplotlib.colors import LogNorm, PowerNorm, Normalize
 from matplotlib.colors import BoundaryNorm
@@ -23,6 +23,55 @@ import geopandas as gpd
 from scipy.interpolate import Rbf
 from pyproj import CRS, Transformer
 from matplotlib.patches import PathPatch
+
+# Robust global font configuration (attempt Times New Roman, fallback gracefully)
+import matplotlib as mpl
+from matplotlib import font_manager as _fm
+
+def _set_global_font():
+    """Attempt to use Times New Roman; fall back to similar serif fonts without raising warnings.
+    Order of preference can be customized by editing preferred list.
+    You can also set environment variable TNR_TTF_PATH to a .ttf file if not installed system-wide.
+    """
+    # If user supplied a direct path via env var, try to register it first
+    ttf_path = os.getenv('TNR_TTF_PATH')
+    if ttf_path and os.path.isfile(ttf_path):
+        try:
+            _fm.fontManager.addfont(ttf_path)
+        except Exception:
+            pass  # Non-fatal
+
+    preferred = [
+        'Times New Roman',  # standard name
+        'TimesNewRoman',    # alt internal naming
+        'Times',            # generic
+        'Nimbus Roman',     # common on Linux (URW)
+        'Liberation Serif',
+        'DejaVu Serif'
+    ]
+    available = {f.name.lower(): f.name for f in _fm.fontManager.ttflist}
+    chosen = None
+    for cand in preferred:
+        # match by substring to be tolerant of variations
+        low = cand.lower()
+        if any(low in fname for fname in available.keys()):
+            # pick the first matching full registered name
+            for key, val in available.items():
+                if low in key:
+                    chosen = val
+                    break
+        if chosen:
+            break
+    if not chosen:
+        # Last resort: don't change default to avoid warnings
+        return
+    mpl.rcParams.update({
+        'font.family': chosen,
+        'mathtext.fontset': 'stix',  # Better match for Times-like fonts
+        'axes.unicode_minus': False
+    })
+
+_set_global_font()
 
 logging.basicConfig(level=logging.INFO)
 
@@ -209,11 +258,20 @@ def plot_amplitude_scatter(summary: pd.DataFrame, low_thr: float, high_thr: floa
 
 def plot_spatial_interpolation(summary: pd.DataFrame, out_dir: str,
                                boundary_shp: str = '../data/gis/choushi_edit.shp',
-                               grid_size: int = 200):
+                               grid_size: int = 200,
+                               cmap: str = 'plasma', 
+                               use_log: bool = False,
+                               invert_cmap: bool = True,
+                               label_fontsize: int = 9):   # <— added parameter
     """
     Interpolates 1cpd and 2cpd amplitudes using RBF and plots them in two subplots,
     with station locations and labels. Properly clips interpolation to boundary.
     """
+    # Decide final colormap (append _r to invert)
+    cmap_final = cmap
+    if invert_cmap:
+        if not cmap.endswith('_r'):
+            cmap_final = cmap + '_r'
     # Define CRS and transformer
     twd97_crs = CRS.from_string("+proj=tmerc +lat_0=0 +lon_0=121 +k=0.9999 +x_0=250000 +y_0=0 +ellps=GRS80 +units=m +no_defs")
     wgs84_crs = CRS.from_string("+proj=longlat +datum=WGS84 +no_defs")
@@ -244,7 +302,7 @@ def plot_spatial_interpolation(summary: pd.DataFrame, out_dir: str,
     # Create figure with two subplots (manual spacing control)
     fig, axes = plt.subplots(1, 2, figsize=(18, 8))  # removed constrained_layout for custom spacing
     fig.subplots_adjust(wspace=0.01)  # reduced gap between subplots
-    fig.suptitle('Spatial Interpolation of Pumping Amplitudes')
+    #fig.suptitle('Spatial Interpolation of Pumping Amplitudes')
 
     data_to_plot = {'1cpd': 'amplitude_1cpd', '2cpd': 'amplitude_2cpd'}
     titles = {'1cpd': '1 cpd Amplitude', '2cpd': '2 cpd Amplitude'}
@@ -288,20 +346,24 @@ def plot_spatial_interpolation(summary: pd.DataFrame, out_dir: str,
             logging.warning(f"Could not apply boundary mask for {key}: {e}")
             Zi_masked = Zi
 
+        # After computing Zi (interpolated values)
+        # Choose normalization
+        if use_log and np.nanmin(Zi) > 0:
+            from matplotlib.colors import LogNorm
+            norm = LogNorm(vmin=np.nanmin(Zi), vmax=np.nanmax(Zi))
+        else:
+            norm = None
         # Plot contour with masked data
         try:
-            contour = ax.contourf(Xi, Yi, Zi_masked, levels=20, cmap='coolwarm', alpha=0.7, extend='both')
-            cbar = fig.colorbar(contour, ax=ax, pad=0.01, fraction=0.035,
-                                extend='both', extendrect=True)
-            cbar.set_label('Amplitude', rotation=270, labelpad=12)
-            cbar.ax.yaxis.set_label_position('right')
-        except Exception as e:
-            logging.warning(f"Contour plot failed for {key}: {e}")
-            contour = ax.contourf(Xi, Yi, Zi, levels=20, cmap='coolwarm', alpha=0.7, extend='both')
-            cbar = fig.colorbar(contour, ax=ax, pad=0.01, fraction=0.035,
-                                extend='both', extendrect=True)
-            cbar.set_label('Amplitude', rotation=270, labelpad=12)
-            cbar.ax.yaxis.set_label_position('right')
+            contour = ax.contourf(Xi, Yi, Zi_masked, levels=20, cmap=cmap_final, norm=norm,
+                                  alpha=0.9, extend='both')
+        except Exception:
+            contour = ax.contourf(Xi, Yi, Zi, levels=20, cmap=cmap_final, norm=norm,
+                                  alpha=0.9, extend='both')
+        cbar = fig.colorbar(contour, ax=ax, pad=0.01, fraction=0.035,
+                            extend='both', extendrect=True)
+        cbar.set_label('Amplitude', rotation=270, labelpad=12)
+        cbar.ax.yaxis.set_label_position('right')
 
         # Plot boundary
         boundary_gdf.plot(ax=ax, facecolor='none', edgecolor='black', linewidth=1.5)
@@ -309,8 +371,14 @@ def plot_spatial_interpolation(summary: pd.DataFrame, out_dir: str,
         # Plot station points and labels
         ax.scatter(x_coords, y_coords, c='black', marker='.', s=50, label='Stations', zorder=5)
         for i, station_id in enumerate(sub_df['station id']):
-            ax.annotate(station_id, (x_coords[i], y_coords[i]), fontsize=7, 
-                       xytext=(2, 2), textcoords='offset points', zorder=6)
+            ax.annotate(
+                station_id,
+                (x_coords[i], y_coords[i]),
+                fontsize=label_fontsize,          # was 7
+                xytext=(2, 2),
+                textcoords='offset points',
+                zorder=6
+            )
 
         ax.set_title(titles[key])
         ax.set_xlabel('Longitude')
@@ -323,65 +391,106 @@ def plot_spatial_interpolation(summary: pd.DataFrame, out_dir: str,
     _savefig(fig, os.path.join(out_dir, 'spatial_interpolation.tif'))
 
 
-def plot_amplitude_hist(summary: pd.DataFrame, out_dir: str):
-    fig, axes = plt.subplots(1, 2, figsize=(10, 4), sharey=True)
-    bins = 20
-    for ax, target in zip(axes, ['1cpd', '2cpd']):
-        vals = summary[f'amplitude_{target}'].dropna().values
-        # Draw grid first (behind) with low z-order
-        ax.grid(True, alpha=0.3, zorder=0)
-        # Histogram bars with higher z-order so they appear on top of grid
-        ax.hist(vals, bins=bins, color='#4c78a8', alpha=1,
-                edgecolor='black', linewidth=0.5, zorder=2)
-        ax.set_title(f'Amplitude distribution — {target}')
+def plot_amplitude_hist(summary: pd.DataFrame, out_dir: str, low_thr: float = np.nan, high_thr: float = np.nan):
+    """
+    Publication-quality histograms for amplitudes at 1 cpd / 2 cpd:
+    - Shared adaptive (Freedman–Diaconis) bins
+    - KDE overlay scaled to counts
+    - Summary stats annotation
+    (Shading and threshold lines removed per request)
+    """
+    targets = ['1cpd', '2cpd']
+    data = [summary[f'amplitude_{t}'].dropna().values for t in targets]
+    combined = np.concatenate([d for d in data if d.size])
+    if combined.size == 0:
+        return
+
+    # Freedman–Diaconis bin width
+    q75, q25 = np.percentile(combined, [75, 25])
+    iqr = q75 - q25
+    n = combined.size
+    if iqr > 0 and n > 1:
+        bw = 2 * iqr * n ** (-1/3)
+    else:
+        bw = (combined.max() - combined.min()) / 20 if combined.max() > combined.min() else 1.0
+    if bw <= 0:
+        bw = 1.0
+    nbins = int(np.clip(np.ceil((combined.max() - combined.min()) / bw), 8, 60))
+    bins = np.linspace(combined.min(), combined.max(), nbins + 1)
+
+    # Figure
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4), sharey=True)
+    panel_labels = ['(a)', '(b)']
+    # Add a little extra top margin for external panel labels
+    fig.subplots_adjust(top=0.87)
+    face_color = '#4E79A7'
+    edge_color = '#1f1f1f'
+
+    # X-limits with small padding
+    xmin, xmax = bins[0], bins[-1]
+    span = xmax - xmin if xmax > xmin else 1.0
+    xmin -= 0.02 * span
+    xmax += 0.02 * span
+
+    for ax, vals, t, label in zip(axes, data, targets, panel_labels):
+        counts, _, _ = ax.hist(vals,
+                               bins=bins,
+                               color=face_color,
+                               alpha=0.9,
+                               edgecolor=edge_color,
+                               linewidth=0.5,
+                               zorder=3)
+        # KDE overlay (only if enough unique points)
+        if len(np.unique(vals)) > 5:
+            try:
+                kde = gaussian_kde(vals)
+                x_k = np.linspace(xmin, xmax, 400)
+                dens = kde(x_k)
+                # Scale density to histogram counts
+                bin_width = bins[1] - bins[0]
+                dens_scaled = dens * len(vals) * bin_width
+                ax.plot(x_k, dens_scaled, color='#E15759', lw=1.5, zorder=4, label='KDE')
+            except Exception:
+                pass
+
+        # Summary stats
+        med = np.median(vals) if vals.size else np.nan
+        iqr_local = np.subtract(*np.percentile(vals, [75, 25])) if vals.size else np.nan
+        txt = f"n={len(vals)}\nmedian={med:.3g}\nIQR={iqr_local:.3g}"
+        # Left-aligned stats box (moved inward to avoid clipping)
+        ax.text(0.70, 0.97, txt, transform=ax.transAxes,
+                ha='left', va='top', fontsize=9,
+                bbox=dict(boxstyle='round,pad=0.25', facecolor='white', alpha=0.8, lw=0.5))
+
+        ax.set_xlim(xmin, xmax)
         ax.set_xlabel('Amplitude')
+        ax.set_title(f'Amplitude distribution — {t}')
+        ax.grid(True, alpha=0.30, zorder=1, linestyle='--', linewidth=0.4)
+
+    # External panel labels placed just above each axes
+    for lab, ax in zip(panel_labels, axes):
+        pos = ax.get_position()
+        fig.text(pos.x0, pos.y1 + 0.01, lab, ha='left', va='bottom',
+                 fontsize=11, fontweight='bold')
+
     axes[0].set_ylabel('Count')
+
+    # Unified legend (only if KDE drawn)
+    has_kde = any(len(a.lines) > 0 for a in axes)
+    if has_kde:
+        handles = [mpatches.Patch(facecolor=face_color, edgecolor=edge_color, label='Histogram'),
+                   plt.Line2D([0], [0], color='#E15759', lw=1.5, label='KDE (scaled)')]
+        fig.legend(handles=handles, loc='upper center', ncol=2, frameon=False, bbox_to_anchor=(0.5, 1.04))
+
     _savefig(fig, os.path.join(out_dir, 'amplitude_histograms.tif'))
-
-def plot_sample_periodogram(df_gw_st: pd.DataFrame, stations_list: list, freq_minutes: int, dt_hours: float, out_dir: str):
-    # Pick a representative station with >= 12 numeric samples
-    sample = next((s for s in stations_list if pd.to_numeric(df_gw_st[s], errors='coerce').dropna().shape[0] >= 12), None)
-    if sample is None:
-        return
-    series = pd.to_numeric(df_gw_st[sample], errors='coerce')
-    try:
-        rs = series.resample(f'{freq_minutes}min').mean().interpolate('time')
-    except Exception:
-        rs = series.resample(f'{freq_minutes}min').mean().ffill().bfill()
-    y = rs.dropna().values
-    n = len(y)
-    if n < 16:
-        return
-    # Window + zero-pad FFT
-    w = np.hanning(n)
-    cg = w.mean() if w.mean() != 0 else 1.0
-    nfft = int(2 ** np.ceil(np.log2(n)) * 4)
-    Y = fft((y - np.mean(y)) * w, n=nfft)
-    freqs_cpd = fftfreq(nfft, dt_hours)[:nfft // 2] * 24.0
-    amp = (2.0 / (n * cg)) * np.abs(Y[:nfft // 2])
-    power = amp ** 2
-
-    fig, ax = plt.subplots(figsize=(7, 4))
-    ax.plot(freqs_cpd, power, color='#2ca02c', lw=1.0)
-    ax.set_xlim(0, 6)  # show diurnal band clearly
-    ax.set_xlabel('Frequency (cycles per day)')
-    ax.set_ylabel('Power')
-    ax.set_title(f'Periodogram — {sample}')
-    # Mark targets
-    for f0, col in [(1.0, '#d62728'), (2.0, '#1f77b4')]:
-        ax.axvline(f0, color=col, linestyle='--', linewidth=1.2, label=f'{f0:.0f} cpd')
-    ax.legend()
-    ax.grid(True, alpha=0.3)
-    _savefig(fig, os.path.join(out_dir, f'periodogram_{sample}.tif'))
 
 def generate_figures(summary: pd.DataFrame, df_gw_st: pd.DataFrame, stations_list: list, low_thr: float, high_thr: float, freq_minutes: int, dt_hours: float):
     out_dir = '../results/figures'
     plot_category_counts(summary, out_dir)
     plot_amplitude_scatter(summary, low_thr, high_thr, out_dir)
-
-    plot_spatial_interpolation(summary, out_dir)
-
-    plot_amplitude_hist(summary, out_dir)
+    plot_spatial_interpolation(summary, out_dir, cmap='plasma', invert_cmap=True, label_fontsize=11)
+    # pass thresholds to improved histogram
+    plot_amplitude_hist(summary, out_dir, low_thr=low_thr, high_thr=high_thr)
     plot_sample_periodogram(df_gw_st, stations_list, freq_minutes, dt_hours, out_dir)
 
 def resample_uniform(series: pd.Series, freq_minutes: int) -> pd.Series:
@@ -735,6 +844,33 @@ def main():
         print(f"\nCategory counts for {name}: {counts}")
 
     # Generate and save figures for the paper
+    try:
+        generate_figures(summary, df_gw_st, stations_list, low_thr, high_thr, freq_minutes, dt_hours)
+        logging.info("Saved figures to ../results/figures")
+    except Exception:
+        logging.debug("Figure generation failed", exc_info=True)
+
+    # Validation: Negative controls and Agreement metrics
+    try:
+        validate_negative_controls(summary, df_gw_st, stations_list,
+                                   control_cpd=(0.37, 1.37, 2.73, 3.41),
+                                   low_thr=low_thr, high_thr=high_thr,
+                                   freq_minutes=freq_minutes, dt_hours=dt_hours)
+    except Exception:
+        logging.debug("Negative control validation failed", exc_info=True)
+    try:
+        validate_cross_method_welch(summary, df_gw_st, stations_list,
+                                    low_thr=low_thr, high_thr=high_thr,
+                                    freq_minutes=freq_minutes, dt_hours=dt_hours)
+    except Exception:
+        logging.debug("Cross-method (Welch) validation failed", exc_info=True)
+    try:
+        validate_threshold_cv(summary, k=5, random_state=42)
+    except Exception:
+        logging.debug("Threshold CV failed", exc_info=True)
+
+if __name__ == '__main__':
+    main()
     try:
         generate_figures(summary, df_gw_st, stations_list, low_thr, high_thr, freq_minutes, dt_hours)
         logging.info("Saved figures to ../results/figures")

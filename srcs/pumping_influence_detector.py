@@ -391,6 +391,75 @@ def plot_spatial_interpolation(summary: pd.DataFrame, out_dir: str,
     _savefig(fig, os.path.join(out_dir, 'spatial_interpolation.tif'))
 
 
+def plot_study_area_stations(summary: pd.DataFrame, out_dir: str,
+                             boundary_shp: str = '../data/gis/choushi_edit.shp',
+                             label_fontsize: int = 9):
+    """
+    Plot study-area boundary and station locations with station-id labels.
+    """
+    twd97_crs = CRS.from_string("+proj=tmerc +lat_0=0 +lon_0=121 +k=0.9999 +x_0=250000 +y_0=0 +ellps=GRS80 +units=m +no_defs")
+    wgs84_crs = CRS.from_string("+proj=longlat +datum=WGS84 +no_defs")
+    transformer_to_wgs84 = Transformer.from_crs(twd97_crs, wgs84_crs, always_xy=True)
+
+    # Prepare station coordinates
+    df = summary.dropna(subset=['TM_X97', 'TM_Y97', 'station id']).copy()
+    if df.empty:
+        logging.warning("No station coordinates available for study-area figure.")
+        return
+    x_tm = df['TM_X97'].astype(float).values
+    y_tm = df['TM_Y97'].astype(float).values
+    x_wgs, y_wgs = transformer_to_wgs84.transform(x_tm, y_tm)
+    df['lon'] = x_wgs
+    df['lat'] = y_wgs
+
+    # Read boundary shapefile when available; otherwise fall back to station extent
+    boundary_gdf = None
+    try:
+        boundary_gdf = gpd.read_file(boundary_shp)
+        if boundary_gdf.crs is None:
+            boundary_gdf = boundary_gdf.set_crs(epsg=4326)
+        elif boundary_gdf.crs.to_epsg() != 4326:
+            boundary_gdf = boundary_gdf.to_crs(epsg=4326)
+        xmin, ymin, xmax, ymax = boundary_gdf.total_bounds
+    except Exception as e:
+        logging.warning("Could not load study-area shapefile '%s': %s", boundary_shp, e)
+        xmin, xmax = float(df['lon'].min()), float(df['lon'].max())
+        ymin, ymax = float(df['lat'].min()), float(df['lat'].max())
+
+    # Add a small border around map extent
+    dx = (xmax - xmin) if xmax > xmin else 0.01
+    dy = (ymax - ymin) if ymax > ymin else 0.01
+    pad_x = 0.05 * dx
+    pad_y = 0.05 * dy
+    xmin, xmax = xmin - pad_x, xmax + pad_x
+    ymin, ymax = ymin - pad_y, ymax + pad_y
+
+    fig, ax = plt.subplots(figsize=(8, 8))
+    if boundary_gdf is not None:
+        boundary_gdf.plot(ax=ax, facecolor='#f2f2f2', edgecolor='black', linewidth=1.2, zorder=1)
+
+    ax.scatter(df['lon'].values, df['lat'].values, c='#c0392b', s=28,
+               edgecolors='black', linewidths=0.4, zorder=3)
+    for _, row in df.iterrows():
+        ax.annotate(str(row['station id']),
+                    (row['lon'], row['lat']),
+                    fontsize=label_fontsize,
+                    xytext=(2, 2),
+                    textcoords='offset points',
+                    zorder=4)
+
+    ax.set_title('Study Area and Station IDs')
+    ax.set_xlabel('Longitude')
+    ax.set_ylabel('Latitude')
+    ax.set_xlim(xmin, xmax)
+    ax.set_ylim(ymin, ymax)
+    ax.set_aspect('equal', adjustable='box')
+    ax.ticklabel_format(useOffset=False, style='plain')
+    ax.grid(True, alpha=0.25)
+
+    _savefig(fig, os.path.join(out_dir, 'study_area_stations.tif'))
+
+
 def plot_amplitude_hist(summary: pd.DataFrame, out_dir: str, low_thr: float = np.nan, high_thr: float = np.nan):
     """
     Publication-quality histograms for amplitudes at 1 cpd / 2 cpd:
@@ -488,6 +557,7 @@ def generate_figures(summary: pd.DataFrame, df_gw_st: pd.DataFrame, stations_lis
     out_dir = '../results/figures'
     plot_category_counts(summary, out_dir)
     plot_amplitude_scatter(summary, low_thr, high_thr, out_dir)
+    plot_study_area_stations(summary, out_dir, boundary_shp='../data/gis/choushi_edit.shp', label_fontsize=11)
     plot_spatial_interpolation(summary, out_dir, cmap='plasma', invert_cmap=True, label_fontsize=11)
     # pass thresholds to improved histogram
     plot_amplitude_hist(summary, out_dir, low_thr=low_thr, high_thr=high_thr)

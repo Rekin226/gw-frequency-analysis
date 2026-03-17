@@ -23,6 +23,7 @@ import geopandas as gpd
 from scipy.interpolate import Rbf
 from pyproj import CRS, Transformer
 from matplotlib.patches import PathPatch
+from matplotlib.patches import FancyArrowPatch
 
 # Robust global font configuration (attempt Times New Roman, fallback gracefully)
 import matplotlib as mpl
@@ -169,6 +170,43 @@ def categorize_with_thresholds(amplitudes: pd.Series, low_thr: float, high_thr: 
         return 'high'
     return amplitudes.map(label)
 
+def _add_north_arrow(ax, x=0.94, y=0.12, size=0.07):
+    """Add a simple north arrow in the bottom-right of *ax* (axes fraction coords)."""
+    ax.annotate('', xy=(x, y + size), xytext=(x, y),
+                xycoords='axes fraction', textcoords='axes fraction',
+                arrowprops=dict(arrowstyle='->', color='black', lw=1.5))
+    ax.text(x, y + size + 0.02, 'N', ha='center', va='bottom',
+            fontsize=9, fontweight='bold', transform=ax.transAxes)
+
+
+def _add_scale_bar(ax, lat_center, length_km=5, x0=0.05, y0=0.04, height=0.012):
+    """
+    Add a scale bar at the bottom of *ax*.
+    *lat_center* is used to convert km → degrees longitude.
+    *x0*, *y0* are the left anchor in axes-fraction coordinates.
+    """
+    import math
+    # degrees of longitude per km at lat_center
+    deg_per_km_lon = 1.0 / (111.32 * math.cos(math.radians(lat_center)))
+    deg_per_km_lat = 1.0 / 110.574
+
+    # Convert axes-fraction anchor to data coordinates
+    xlim = ax.get_xlim()
+    ylim = ax.get_ylim()
+    x_data = xlim[0] + x0 * (xlim[1] - xlim[0])
+    y_data = ylim[0] + y0 * (ylim[1] - ylim[0])
+    bar_len = length_km * deg_per_km_lon          # bar length in data (lon) degrees
+    bar_h   = height * (ylim[1] - ylim[0])        # bar height in data coords
+
+    # Draw filled rectangle
+    from matplotlib.patches import FancyBboxPatch
+    rect = mpatches.Rectangle((x_data, y_data), bar_len, bar_h,
+                               linewidth=0.8, edgecolor='black', facecolor='black', zorder=7)
+    ax.add_patch(rect)
+    ax.text(x_data + bar_len / 2, y_data + bar_h * 1.6,
+            f'{length_km} km', ha='center', va='bottom', fontsize=8, zorder=8)
+
+
 def _savefig(fig, out_path, dpi=300):
     """
     Save figure as TIFF (overrides provided extension), 300 dpi by default.
@@ -255,6 +293,118 @@ def plot_amplitude_scatter(summary: pd.DataFrame, low_thr: float, high_thr: floa
         ax.grid(True, alpha=0.3)
 
     _savefig(fig, os.path.join(out_dir, 'amplitude_scatter.tif'))
+
+
+def _add_north_arrow(ax, location='lower right', size=0.08, pad=0.05):
+    """
+    Add a north arrow (triangle) to the axis.
+    
+    Parameters
+    ----------
+    ax : matplotlib.axes.Axes
+        The axis to add the north arrow to.
+    location : str
+        Location of the north arrow: 'lower right', 'lower left', 'upper right', 'upper left'.
+    size : float
+        Size of the north arrow as a fraction of the axis width.
+    pad : float
+        Padding from the edge as a fraction of the axis width.
+    """
+    xlim = ax.get_xlim()
+    ylim = ax.get_ylim()
+    x_range = xlim[1] - xlim[0]
+    y_range = ylim[1] - ylim[0]
+    
+    # Determine position based on location
+    if 'right' in location:
+        x_pos = xlim[1] - pad * x_range
+    else:
+        x_pos = xlim[0] + pad * x_range
+    
+    if 'lower' in location:
+        y_pos = ylim[0] + pad * y_range
+    else:
+        y_pos = ylim[1] - pad * y_range
+    
+    arrow_height = size * x_range
+    arrow_width = arrow_height * 0.3
+    
+    # Draw triangle pointing up
+    triangle_x = [x_pos - arrow_width/2, x_pos + arrow_width/2, x_pos]
+    triangle_y = [y_pos, y_pos, y_pos + arrow_height]
+    ax.fill(triangle_x, triangle_y, color='black')
+    
+    # Add 'N' label
+    ax.text(x_pos, y_pos + arrow_height * 1.15, 'N',
+            fontsize=12, fontweight='bold',
+            ha='center', va='bottom')
+
+
+def _add_scale_bar(ax, location='lower center', length_km=5, pad=0.05):
+    """
+    Add a scale bar to the axis with two intervals of 5km each (total 10km).
+    
+    Parameters
+    ----------
+    ax : matplotlib.axes.Axes
+        The axis to add the scale bar to.
+    location : str
+        Location of the scale bar: 'lower center', 'upper center'.
+    length_km : float
+        Length of each interval in kilometers (default 5km, total bar = 2 * length_km).
+    pad : float
+        Padding from the bottom edge as a fraction of the axis height.
+    """
+    xlim = ax.get_xlim()
+    ylim = ax.get_ylim()
+    x_range = xlim[1] - xlim[0]
+    y_range = ylim[1] - ylim[0]
+    
+    # Convert km to degrees (approximate at mid-latitudes)
+    # 1 degree longitude ≈ 111 * cos(lat) km, 1 degree latitude ≈ 111 km
+    # For Taiwan (~24°N), 1° longitude ≈ 101 km
+    lat_deg_per_km = 1 / 111  # latitude
+    lon_deg_per_km = 1 / (111 * np.cos(np.radians(24)))  # longitude at ~24°N
+    
+    # Use average for scale bar length
+    deg_per_km = (lat_deg_per_km + lon_deg_per_km) / 2
+    
+    # Two intervals of length_km each (total = 10km by default)
+    n_intervals = 2
+    total_length_km = n_intervals * length_km
+    bar_length_deg = total_length_km * deg_per_km
+    interval_deg = bar_length_deg / n_intervals
+    
+    # Determine position
+    x_center = (xlim[0] + xlim[1]) / 2
+    if 'lower' in location:
+        y_pos = ylim[0] + pad * y_range
+    else:
+        y_pos = ylim[1] - pad * y_range
+    
+    x_start = x_center - bar_length_deg / 2
+    x_end = x_center + bar_length_deg / 2
+    
+    # Draw main scale bar line
+    ax.plot([x_start, x_end], [y_pos, y_pos], 'k-', linewidth=2)
+    
+    # Draw tick marks at each interval
+    tick_height = 0.015 * y_range
+    for i in range(n_intervals + 1):
+        x_tick = x_start + i * interval_deg
+        ax.plot([x_tick, x_tick], [y_pos - tick_height/2, y_pos + tick_height/2], 'k-', linewidth=1)
+    
+    # Add labels for each interval (above the scale bar)
+    for i in range(n_intervals + 1):
+        x_label = x_start + i * interval_deg
+        km_label = i * length_km
+        ax.text(x_label, y_pos + tick_height * 0.8, f'{km_label}',
+                fontsize=9, ha='center', va='bottom', fontweight='bold')
+    
+    # Add unit label (below the scale bar)
+    ax.text(x_center, y_pos - tick_height * 1.2, 'km',
+            fontsize=10, ha='center', va='top', fontweight='bold')
+
 
 def plot_spatial_interpolation(summary: pd.DataFrame, out_dir: str,
                                boundary_shp: str = '../data/gis/choushi_edit.shp',
@@ -386,6 +536,10 @@ def plot_spatial_interpolation(summary: pd.DataFrame, out_dir: str,
         ax.set_xlim(xmin, xmax)
         ax.set_ylim(ymin, ymax)
         ax.grid(True, alpha=0.3)
+        
+        # Add north arrow and scale bar
+        _add_north_arrow(ax, location='lower right', size=0.08, pad=0.05)
+        _add_scale_bar(ax, location='lower center', length_km=5, pad=0.05)
 
     axes[0].set_ylabel('Latitude')
     _savefig(fig, os.path.join(out_dir, 'spatial_interpolation.tif'))
@@ -456,6 +610,10 @@ def plot_study_area_stations(summary: pd.DataFrame, out_dir: str,
     ax.set_aspect('equal', adjustable='box')
     ax.ticklabel_format(useOffset=False, style='plain')
     ax.grid(True, alpha=0.25)
+    
+    # Add north arrow and scale bar
+    _add_north_arrow(ax, location='lower right', size=0.08, pad=0.05)
+    _add_scale_bar(ax, location='lower center', length_km=5, pad=0.05)
 
     _savefig(fig, os.path.join(out_dir, 'study_area_stations.tif'))
 
